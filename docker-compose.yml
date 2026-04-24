@@ -1,9 +1,7 @@
-version: "3.9"
-
 services:
   ollama:
     image: ollama/ollama:latest
-    container_name: ollama
+    container_name: aiplatform-ollama
     restart: unless-stopped
     ports:
       - "11434:11434"
@@ -20,7 +18,7 @@ services:
 
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
-    container_name: litellm
+    container_name: aiplatform-litellm
     restart: unless-stopped
     ports:
       - "4000:4000"
@@ -32,28 +30,85 @@ services:
     depends_on:
       - ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
+    container_name: aiplatform-open-webui
     restart: unless-stopped
     ports:
-      - "3000:8080"
+      - "3001:8080"
     volumes:
       - open_webui_data:/app/backend/data
     environment:
-      - OPENAI_API_BASE_URL=http://litellm:4000
+      - OPENAI_API_BASE_URL=http://aiplatform-litellm:4000
       - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
       - ENABLE_OLLAMA_API=false
     depends_on:
-      litellm:
+      - litellm
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiplatform-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiplatform-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    container_name: aiplatform-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - API_KEY=${API_KEY}
+      - LITELLM_BASE_URL=http://aiplatform-litellm:4000
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@aiplatform-postgres:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@aiplatform-redis:6379
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      litellm:
+        condition: service_started
 
 volumes:
   ollama_data:
   open_webui_data:
+  postgres_data:
+  redis_data:
