@@ -1,0 +1,26 @@
+model_list:
+  # Modelo general de chat
+  - model_name: chat
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+  # Modelo especializado en código
+  - model_name: code
+    litellm_params:
+      model: ollama/codellama
+      api_base: http://ollama:11434
+
+  # Modelo con visión
+  - model_name: vision
+    litellm_params:
+      model: ollama/llava
+      api_base: http://ollama:11434
+
+litellm_settings:
+  set_verbose: false
+  # drop_params: true  # descomentar si algún modelo no acepta ciertos params
+
+# Futuro: añadir fallbacks, routing por coste, etc.
+# router_settings:
+#   routing_strategy: least-busy

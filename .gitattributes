@@ -1,0 +1,7 @@
+# Forzar LF en todos los archivos de texto — el proyecto corre en Linux
+* text=auto eol=lf
+
+# Binarios — sin conversión
+*.png binary
+*.jpg binary
+*.ico binary
