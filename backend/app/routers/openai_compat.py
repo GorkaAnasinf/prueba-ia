@@ -58,7 +58,6 @@ async def _stream_from_litellm(payload: dict):
 async def chat_completions(request: Request, _: str = Depends(require_bearer_key)):
     body = await request.json()
     messages = body.get("messages", [])
-    query = _last_user_content(messages)
     model = body.get("model", "chat")
 
     recent = messages[-6:] if len(messages) > 6 else messages
