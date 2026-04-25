@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, ScoredPoint
+from rank_bm25 import BM25Okapi
 
 from ..auth import require_api_key
 from ..config import settings
@@ -15,6 +16,10 @@ router = APIRouter(prefix="/rag", tags=["rag"])
 VECTOR_SIZE = 768
 CHUNK_SIZE = 1200
 MIN_SCORE = 0.45
+BM25_TOP_K = 20
+HYBRID_TOP_K = 5
+BM25_WEIGHT = 0.3
+SEMANTIC_WEIGHT = 0.7
 
 
 def _qdrant() -> QdrantClient:
@@ -119,6 +124,54 @@ def do_ingest() -> IngestResponse:
         client.upsert(collection_name=settings.rag_collection, points=points)
 
     return IngestResponse(files_processed=files_processed, chunks_indexed=len(points))
+
+
+def hybrid_search(query: str, top_k: int = HYBRID_TOP_K) -> list[dict]:
+    """Combina búsqueda semántica (Qdrant) con BM25 para resultados más precisos."""
+    client = _qdrant()
+    _ensure_collection(client)
+
+    # Semantic search — fetch more candidates for re-ranking
+    hits = client.search(
+        collection_name=settings.rag_collection,
+        query_vector=_embed(query),
+        limit=BM25_TOP_K,
+        score_threshold=MIN_SCORE,
+    )
+    if not hits:
+        return []
+
+    docs = [h.payload["content"] for h in hits]
+    files = [h.payload["file"] for h in hits]
+    semantic_scores = [h.score for h in hits]
+
+    # BM25 over the candidate set
+    tokenized = [d.lower().split() for d in docs]
+    bm25 = BM25Okapi(tokenized)
+    bm25_scores = bm25.get_scores(query.lower().split())
+
+    # Normalize each score array to [0, 1]
+    def _norm(arr):
+        mn, mx = min(arr), max(arr)
+        if mx == mn:
+            return [1.0] * len(arr)
+        return [(v - mn) / (mx - mn) for v in arr]
+
+    sem_n = _norm(semantic_scores)
+    bm25_n = _norm(list(bm25_scores))
+
+    combined = [
+        SEMANTIC_WEIGHT * s + BM25_WEIGHT * b
+        for s, b in zip(sem_n, bm25_n)
+    ]
+
+    ranked = sorted(
+        zip(combined, docs, files),
+        key=lambda x: x[0],
+        reverse=True,
+    )[:top_k]
+
+    return [{"score": s, "content": c, "file": f} for s, c, f in ranked]
 
 
 @router.post("/ingest", response_model=IngestResponse)

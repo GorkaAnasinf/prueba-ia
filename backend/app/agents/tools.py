@@ -7,7 +7,7 @@ from datetime import datetime
 from ..config import settings
 from ..database import SessionLocal
 from ..models import Task
-from ..routers.rag import _embed, _qdrant, _ensure_collection, MIN_SCORE
+from ..routers.rag import hybrid_search
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +16,11 @@ logger = logging.getLogger(__name__)
 def search_vault(query: str) -> str:
     """Busca información relevante en la base de conocimiento (vault de Obsidian)."""
     try:
-        client = _qdrant()
-        _ensure_collection(client)
-        hits = client.search(
-            collection_name=settings.rag_collection,
-            query_vector=_embed(query),
-            limit=5,
-            score_threshold=MIN_SCORE,
-        )
-        if not hits:
+        results = hybrid_search(query)
+        if not results:
             return "No se encontró información relevante en el vault."
         return "\n\n---\n\n".join(
-            f"[{h.payload['file']}]\n{h.payload['content']}" for h in hits
+            f"[{r['file']}]\n{r['content']}" for r in results
         )
     except Exception as e:
         return f"Error en búsqueda: {e}"

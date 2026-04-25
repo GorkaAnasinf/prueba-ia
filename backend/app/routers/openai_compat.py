@@ -1,3 +1,5 @@
+import asyncio
+import json
 import time
 import uuid
 from fastapi import APIRouter, Depends, Request
@@ -7,9 +9,15 @@ import httpx
 
 from ..auth import require_bearer_key
 from ..config import settings
-from ..agents.graph import graph
+from ..agents.graph import graph, router_node, AGENT_MODELS, _get_llm, _last_user_message
+from ..agents.tools import search_vault, list_tasks
+from ..cache import cache_get, cache_set
+from ..memory import load_memory, save_memory
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
+
+_STREAMABLE = {"research", "writer", "analyst", "general"}
+_MEMORY_THRESHOLD = 6  # save memory after this many messages
 
 
 def _convert_messages(messages: list[dict]) -> list[BaseMessage]:
@@ -24,6 +32,21 @@ def _convert_messages(messages: list[dict]) -> list[BaseMessage]:
         elif role == "system":
             result.append(SystemMessage(content=content))
     return result
+
+
+def _sse_chunk(content: str, model: str, finish: bool = False) -> str:
+    chunk = {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {} if finish else {"role": "assistant", "content": content},
+            "finish_reason": "stop" if finish else None,
+        }],
+    }
+    return f"data: {json.dumps(chunk)}\n\n"
 
 
 def _wrap_openai(content: str, model: str, agent_used: str) -> dict:
@@ -42,47 +65,130 @@ def _wrap_openai(content: str, model: str, agent_used: str) -> dict:
     }
 
 
-async def _stream_from_litellm(payload: dict):
-    async with httpx.AsyncClient(timeout=120) as client:
-        async with client.stream(
-            "POST",
-            f"{settings.litellm_base_url}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {settings.litellm_master_key}"},
-            json={**payload, "stream": True},
-        ) as resp:
-            async for chunk in resp.aiter_text():
-                yield chunk
+def _build_system_prompt(agent: str, context: str, memory: str) -> str:
+    memory_block = f"\n\n{memory}" if memory else ""
+
+    if agent == "research":
+        return (
+            "Eres un agente de investigación. Responde basándote SOLO en el contexto proporcionado. "
+            "Si el contexto no contiene la información, dilo claramente. "
+            f"Cita el archivo fuente entre corchetes.{memory_block}\n\nCONTEXTO:\n{context}"
+        )
+    if agent == "writer":
+        return (
+            "Eres un agente redactor profesional. Genera documentos en markdown bien estructurados "
+            f"basándote en el contexto del vault. Empieza directamente con el documento.{memory_block}\n\nCONTEXTO:\n{context}"
+        )
+    if agent == "analyst":
+        return (
+            "Eres un agente analítico. Analiza la información y genera informes con conclusiones claras. "
+            f"Usa tablas y listas cuando sea útil.{memory_block}\n\nCONTEXTO:\n{context}"
+        )
+    # general
+    return f"Eres un asistente útil y conciso.{memory_block}"
+
+
+async def _stream_agent(agent: str, messages: list[BaseMessage], model: str):
+    """Yield SSE chunks from a streamable agent."""
+    query = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    memory = load_memory()
+
+    # Cache check (research / analyst only)
+    cached = cache_get(query, agent)
+    if cached:
+        yield _sse_chunk(cached, model)
+        yield _sse_chunk("", model, finish=True)
+        yield "data: [DONE]\n\n"
+        return
+
+    # Build context
+    context = ""
+    if agent in ("research", "writer", "analyst"):
+        context = await asyncio.to_thread(search_vault.invoke, query)
+        if agent == "analyst":
+            tasks_info = await asyncio.to_thread(list_tasks.invoke, {"project": "", "status": ""})
+            context = f"{context}\n\nTAREAS EXISTENTES:\n{tasks_info}"
+
+    system = _build_system_prompt(agent, context, memory)
+    llm = _get_llm(AGENT_MODELS.get(agent, "chat"))
+
+    full_response = []
+    async for chunk in llm.astream([SystemMessage(content=system), *messages]):
+        token = chunk.content
+        if token:
+            full_response.append(token)
+            yield _sse_chunk(token, model)
+
+    yield _sse_chunk("", model, finish=True)
+    yield "data: [DONE]\n\n"
+
+    collected = "".join(full_response)
+    cache_set(query, agent, collected)
+    await asyncio.to_thread(save_memory, messages, collected)
 
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request, _: str = Depends(require_bearer_key)):
     body = await request.json()
-    messages = body.get("messages", [])
+    raw_messages = body.get("messages", [])
     model = body.get("model", "chat")
+    do_stream = body.get("stream", False)
 
-    recent = messages[-20:] if len(messages) > 20 else messages
-    result = graph.invoke({
-        "messages": _convert_messages(recent),
-        "agent_used": "",
-    })
+    recent = raw_messages[-20:] if len(raw_messages) > 20 else raw_messages
+    lc_messages = _convert_messages(recent)
 
-    ai_msgs = [m for m in result["messages"] if m.__class__.__name__ == "AIMessage"]
+    # Route first (always synchronous, fast)
+    state = {"messages": lc_messages, "agent_used": ""}
+    route_result = await asyncio.to_thread(router_node, state)
+    agent = route_result["agent_used"]
+
+    if do_stream and agent in _STREAMABLE:
+        return StreamingResponse(
+            _stream_agent(agent, lc_messages, model),
+            media_type="text/event-stream",
+        )
+
+    # Non-streamable agents (task, complete) or non-stream request
+    if agent in _STREAMABLE:
+        # Non-stream path for streamable agents
+        query = next((m.content for m in reversed(lc_messages) if isinstance(m, HumanMessage)), "")
+        memory = load_memory()
+        cached = cache_get(query, agent)
+        if cached:
+            return _wrap_openai(cached, model, agent)
+
+        context = ""
+        if agent in ("research", "writer", "analyst"):
+            context = await asyncio.to_thread(search_vault.invoke, query)
+            if agent == "analyst":
+                tasks_info = await asyncio.to_thread(list_tasks.invoke, {"project": "", "status": ""})
+                context = f"{context}\n\nTAREAS EXISTENTES:\n{tasks_info}"
+
+        system = _build_system_prompt(agent, context, memory)
+        llm = _get_llm(AGENT_MODELS.get(agent, "chat"))
+        resp = await asyncio.to_thread(
+            llm.invoke, [SystemMessage(content=system), *lc_messages]
+        )
+        content = resp.content
+        cache_set(query, agent, content)
+        await asyncio.to_thread(save_memory, lc_messages, content)
+        return _wrap_openai(content, model, agent)
+
+    # task / complete — use full graph
+    result = await asyncio.to_thread(
+        graph.invoke,
+        {"messages": lc_messages, "agent_used": agent},
+    )
+    ai_msgs = [m for m in result["messages"] if isinstance(m, AIMessage)]
     content = ai_msgs[-1].content if ai_msgs else "Sin respuesta"
-    agent_used = result.get("agent_used", "unknown")
+    agent_used = result.get("agent_used", agent)
 
-    if body.get("stream", False):
-        async def _fake_stream():
-            import json
-            chunk = {
-                "id": f"chatcmpl-{uuid.uuid4().hex}",
-                "object": "chat.completion.chunk",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-            }
-            yield f"data: {json.dumps(chunk)}\n\n"
+    if do_stream:
+        async def _wrap_stream():
+            yield _sse_chunk(content, model)
+            yield _sse_chunk("", model, finish=True)
             yield "data: [DONE]\n\n"
-        return StreamingResponse(_fake_stream(), media_type="text/event-stream")
+        return StreamingResponse(_wrap_stream(), media_type="text/event-stream")
 
     return _wrap_openai(content, model, agent_used)
 
