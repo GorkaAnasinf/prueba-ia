@@ -114,19 +114,51 @@ def _system_prompt(agent: str, context: str, memory: str) -> str:
     return f"Eres un asistente útil y conciso.{mem}"
 
 
+_AGENT_STEPS = {
+    "research": ["Buscando en vault de Obsidian...", "Buscando en web (SearXNG)..."],
+    "writer":   ["Buscando contexto en vault..."],
+    "analyst":  ["Buscando en vault...", "Consultando tareas existentes..."],
+    "general":  [],
+}
+
+
 async def _stream_agent(agent: str, messages: list[BaseMessage], model: str):
     query = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
     memory = load_memory()
 
+    # ── Thinking header ────────────────────────────────────────────────────────
+    yield _sse_chunk(f"<think>\nAgente seleccionado: **{agent}**\n", model)
+    if memory:
+        yield _sse_chunk("Memoria de sesiones previas cargada.\n", model)
+
     cached = cache_get(query, agent)
     if cached:
+        yield _sse_chunk("✓ Respuesta en caché (Redis)\n</think>\n\n", model)
         yield _sse_chunk(cached, model)
         yield _sse_chunk(_AGENT_BADGE.format(agent=agent), model)
         yield _sse_chunk("", model, finish=True)
         yield "data: [DONE]\n\n"
         return
 
+    for step in _AGENT_STEPS.get(agent, []):
+        yield _sse_chunk(f"{step}\n", model)
+
     context = await _build_context(agent, query)
+
+    # Report what was found
+    if agent == "research":
+        has_vault = "[VAULT]" in context or ("No se encontró" not in context and "Error" not in context and "[WEB]" not in context)
+        has_web = "[WEB]" in context
+        if has_vault:
+            yield _sse_chunk("✓ Contexto del vault encontrado.\n", model)
+        if has_web:
+            yield _sse_chunk("✓ Resultados web obtenidos.\n", model)
+    elif agent in ("writer", "analyst"):
+        yield _sse_chunk("✓ Contexto listo.\n", model)
+
+    yield _sse_chunk("Generando respuesta...\n</think>\n\n", model)
+    # ── End thinking ───────────────────────────────────────────────────────────
+
     system = _system_prompt(agent, context, memory)
     llm = _get_llm(AGENT_MODELS.get(agent, "chat"))
 
