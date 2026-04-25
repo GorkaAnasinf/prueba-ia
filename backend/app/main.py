@@ -1,16 +1,26 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from .config import settings
 from .database import engine
 from .models import Base
 from .routers import chat, conversations, rag, openai_compat, tasks, agent
+from .routers.rag import do_ingest
 from .watcher import start_watcher
+
+logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        result = do_ingest()
+        logger.info(f"Startup ingest: {result.files_processed} files, {result.chunks_indexed} chunks")
+    except Exception as e:
+        logger.warning(f"Startup ingest skipped: {e}")
+
     observer = start_watcher()
     yield
     if observer:

@@ -17,7 +17,7 @@ class AgentState(TypedDict):
 
 
 class RouteDecision(BaseModel):
-    agent: Literal["research", "writer", "analyst", "task"]
+    agent: Literal["research", "writer", "analyst", "task", "general"]
 
 
 AGENT_MODELS = {
@@ -52,17 +52,18 @@ def router_node(state: AgentState) -> dict:
         SystemMessage(content=(
             "Eres un clasificador de intenciones. Analiza el historial completo de la conversación "
             "y clasifica el ÚLTIMO mensaje del usuario en exactamente una de estas palabras:\n"
-            "research — preguntas sobre información, reuniones, acuerdos, plazos, detalles\n"
+            "research — preguntas sobre información, reuniones, acuerdos, plazos, detalles del vault\n"
             "writer   — redactar documentos, propuestas, actas, correos\n"
             "analyst  — análisis de proyectos, informes, comparativas, estado general\n"
-            "task     — SOLO si el usuario pide EXPLÍCITAMENTE crear o añadir tareas nuevas\n\n"
+            "task     — SOLO si el usuario pide EXPLÍCITAMENTE crear o añadir tareas nuevas\n"
+            "general  — conversación general, saludos, preguntas que no requieren el vault\n\n"
             "IMPORTANTE: preguntas de seguimiento sobre tareas ya creadas son 'research', no 'task'.\n"
             "Responde SOLO con la palabra, sin explicación."
         )),
         *state["messages"],
     ])
     raw = resp.content.strip().lower()
-    agent = raw if raw in ("research", "writer", "analyst", "task") else "research"
+    agent = raw if raw in ("research", "writer", "analyst", "task", "general") else "general"
     return {"agent_used": agent}
 
 
@@ -117,6 +118,18 @@ def analyst_node(state: AgentState) -> dict:
         HumanMessage(content=query),
     ])
     return {"messages": [AIMessage(content=resp.content)], "agent_used": "analyst"}
+
+
+# ── General agent ─────────────────────────────────────────────────────────────
+
+def general_node(state: AgentState) -> dict:
+    query = _last_user_message(state)
+    llm = _get_llm("chat")
+    resp = llm.invoke([
+        SystemMessage(content="Eres un asistente útil y conciso."),
+        HumanMessage(content=query),
+    ])
+    return {"messages": [AIMessage(content=resp.content)], "agent_used": "general"}
 
 
 # ── Task agent ─────────────────────────────────────────────────────────────────
@@ -186,14 +199,15 @@ def build_graph():
     workflow.add_node("writer", writer_node)
     workflow.add_node("analyst", analyst_node)
     workflow.add_node("task", task_node)
+    workflow.add_node("general", general_node)
 
     workflow.add_edge(START, "router")
     workflow.add_conditional_edges(
         "router",
         lambda state: state["agent_used"],
-        {"research": "research", "writer": "writer", "analyst": "analyst", "task": "task"},
+        {"research": "research", "writer": "writer", "analyst": "analyst", "task": "task", "general": "general"},
     )
-    for name in ["research", "writer", "analyst", "task"]:
+    for name in ["research", "writer", "analyst", "task", "general"]:
         workflow.add_edge(name, END)
 
     return workflow.compile()

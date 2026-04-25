@@ -37,6 +37,9 @@ def create_task(title: str, description: str, responsible: str, due_date: str, p
     """Crea una tarea en la base de datos y genera un archivo .md en el vault."""
     db = SessionLocal()
     try:
+        existing = db.query(Task).filter(Task.title == title).first()
+        if existing:
+            return f"Tarea ya existe (omitida): '{title}'"
         task = Task(
             title=title,
             description=description,
@@ -48,8 +51,9 @@ def create_task(title: str, description: str, responsible: str, due_date: str, p
         db.add(task)
         db.commit()
         db.refresh(task)
-        _write_task_md(task)
-        return f"Tarea creada: '{title}' (ID: {task.id})"
+        push_ok = _write_task_md(task)
+        suffix = "" if push_ok else " (⚠️ git push fallido — sync manual necesario)"
+        return f"Tarea creada: '{title}'{suffix}"
     except Exception as e:
         db.rollback()
         return f"Error al crear tarea: {e}"
@@ -113,15 +117,20 @@ task_id: {task.id}
 - [ ] Pendiente
 """
     filepath.write_text(content, encoding="utf-8")
-    _git_push_vault(filepath.name)
+    return _git_push_vault(filepath.name)
 
 
-def _git_push_vault(filename: str):
+def _git_push_vault(filename: str) -> bool:
     repo = Path(settings.git_repo_path)
     try:
         subprocess.run(["git", "add", f"obsidian-vault/projects/{filename}"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(["git", "commit", "-m", f"tasks: {filename}"], cwd=repo, check=True, capture_output=True)
+        result = subprocess.run(["git", "commit", "-m", f"tasks: {filename}"], cwd=repo, capture_output=True)
+        if result.returncode != 0 and b"nothing to commit" not in result.stdout:
+            logger.warning(f"Git commit failed: {result.stderr.decode()}")
+            return False
         subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True, capture_output=True)
         logger.info(f"Auto-pushed task: {filename}")
+        return True
     except subprocess.CalledProcessError as e:
         logger.warning(f"Git push failed: {e.stderr.decode()}")
+        return False
