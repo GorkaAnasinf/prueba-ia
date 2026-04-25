@@ -93,6 +93,17 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  searxng:
+    image: searxng/searxng:latest
+    container_name: aiplatform-searxng
+    restart: unless-stopped
+    environment:
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-change-me-searxng-secret}
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    ports:
+      - "8888:8080"
+
   backend:
     build: ./backend
     container_name: aiplatform-backend
@@ -107,6 +118,7 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@aiplatform-redis:6379
       - QDRANT_URL=http://aiplatform-qdrant:6333
       - OLLAMA_BASE_URL=http://aiplatform-ollama:11434
+      - SEARXNG_URL=http://aiplatform-searxng:8080
     volumes:
       - ./backend/app:/app/app
       - ./obsidian-vault:/obsidian-vault
@@ -122,6 +134,8 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
+      searxng:
+        condition: service_started
 
 volumes:
   ollama_data:
@@ -129,3 +143,4 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_data:
+  searxng_data:

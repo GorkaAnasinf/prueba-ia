@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     rag_collection: str = "obsidian"
     obsidian_vault_path: str = "/obsidian-vault"
     git_repo_path: str = "/repo"
+    searxng_url: str = "http://aiplatform-searxng:8080"
 
     class Config:
         env_file = ".env"

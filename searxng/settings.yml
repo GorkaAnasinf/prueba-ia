@@ -1,0 +1,45 @@
+use_default_settings: true
+
+general:
+  instance_name: "AI Platform Search"
+  debug: false
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "${SEARXNG_SECRET_KEY}"
+  image_proxy: false
+
+ui:
+  default_locale: "es"
+  default_theme: simple
+  infinite_scroll: false
+
+search:
+  safe_search: 0
+  default_lang: "es-ES"
+  formats:
+    - html
+    - json
+
+engines:
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+    disabled: false
+
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    language: es
+    disabled: false

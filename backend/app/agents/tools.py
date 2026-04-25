@@ -1,5 +1,6 @@
 import logging
 import subprocess
+import httpx
 from langchain_core.tools import tool
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +25,30 @@ def search_vault(query: str) -> str:
         )
     except Exception as e:
         return f"Error en búsqueda: {e}"
+
+
+@tool
+def web_search(query: str) -> str:
+    """Busca información actualizada en la web usando SearXNG."""
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(
+                f"{settings.searxng_url}/search",
+                params={"q": query, "format": "json", "language": "es-ES"},
+            )
+            resp.raise_for_status()
+        results = resp.json().get("results", [])[:5]
+        if not results:
+            return "No se encontraron resultados web."
+        lines = []
+        for r in results:
+            title = r.get("title", "")
+            content = r.get("content", "")
+            url = r.get("url", "")
+            lines.append(f"**{title}**\n{content}\n{url}")
+        return "\n\n---\n\n".join(lines)
+    except Exception as e:
+        return f"Error en búsqueda web: {e}"
 
 
 @tool

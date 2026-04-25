@@ -9,15 +9,16 @@ import httpx
 
 from ..auth import require_bearer_key
 from ..config import settings
-from ..agents.graph import graph, router_node, AGENT_MODELS, _get_llm, _last_user_message
-from ..agents.tools import search_vault, list_tasks
+from ..agents.graph import graph, router_node, AGENT_MODELS, _get_llm
+from ..agents.tools import search_vault, web_search, list_tasks
 from ..cache import cache_get, cache_set
 from ..memory import load_memory, save_memory
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
 _STREAMABLE = {"research", "writer", "analyst", "general"}
-_MEMORY_THRESHOLD = 6  # save memory after this many messages
+
+_AGENT_BADGE = "\n\n---\n> 🤖 `agente: {agent}`"
 
 
 def _convert_messages(messages: list[dict]) -> list[BaseMessage]:
@@ -65,51 +66,68 @@ def _wrap_openai(content: str, model: str, agent_used: str) -> dict:
     }
 
 
-def _build_system_prompt(agent: str, context: str, memory: str) -> str:
-    memory_block = f"\n\n{memory}" if memory else ""
-
+async def _build_context(agent: str, query: str) -> str:
+    """Fetch vault + optional web context in parallel for research."""
     if agent == "research":
-        return (
-            "Eres un agente de investigación. Responde basándote SOLO en el contexto proporcionado. "
-            "Si el contexto no contiene la información, dilo claramente. "
-            f"Cita el archivo fuente entre corchetes.{memory_block}\n\nCONTEXTO:\n{context}"
+        vault_ctx, web_ctx = await asyncio.gather(
+            asyncio.to_thread(search_vault.invoke, query),
+            asyncio.to_thread(web_search.invoke, query),
         )
-    if agent == "writer":
-        return (
-            "Eres un agente redactor profesional. Genera documentos en markdown bien estructurados "
-            f"basándote en el contexto del vault. Empieza directamente con el documento.{memory_block}\n\nCONTEXTO:\n{context}"
-        )
-    if agent == "analyst":
-        return (
-            "Eres un agente analítico. Analiza la información y genera informes con conclusiones claras. "
-            f"Usa tablas y listas cuando sea útil.{memory_block}\n\nCONTEXTO:\n{context}"
-        )
-    # general
-    return f"Eres un asistente útil y conciso.{memory_block}"
+        has_vault = "No se encontró" not in vault_ctx and "Error" not in vault_ctx
+        has_web = "No se encontraron" not in web_ctx and "Error" not in web_ctx
+        if has_vault and has_web:
+            return f"[VAULT]\n{vault_ctx}\n\n[WEB]\n{web_ctx}"
+        if has_vault:
+            return vault_ctx
+        if has_web:
+            return f"[WEB]\n{web_ctx}"
+        return "No se encontró información relevante en el vault ni en la web."
 
-
-async def _stream_agent(agent: str, messages: list[BaseMessage], model: str):
-    """Yield SSE chunks from a streamable agent."""
-    query = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
-    memory = load_memory()
-
-    # Cache check (research / analyst only)
-    cached = cache_get(query, agent)
-    if cached:
-        yield _sse_chunk(cached, model)
-        yield _sse_chunk("", model, finish=True)
-        yield "data: [DONE]\n\n"
-        return
-
-    # Build context
-    context = ""
-    if agent in ("research", "writer", "analyst"):
+    if agent in ("writer", "analyst"):
         context = await asyncio.to_thread(search_vault.invoke, query)
         if agent == "analyst":
             tasks_info = await asyncio.to_thread(list_tasks.invoke, {"project": "", "status": ""})
             context = f"{context}\n\nTAREAS EXISTENTES:\n{tasks_info}"
+        return context
 
-    system = _build_system_prompt(agent, context, memory)
+    return ""
+
+
+def _system_prompt(agent: str, context: str, memory: str) -> str:
+    mem = f"\n\n{memory}" if memory else ""
+    if agent == "research":
+        return (
+            "Eres un agente de investigación. Usa el contexto proporcionado (vault interno y/o web). "
+            "Indica la fuente entre corchetes: [archivo.md] para vault, [web] para web. "
+            f"Si no hay contexto relevante, dilo claramente.{mem}\n\nCONTEXTO:\n{context}"
+        )
+    if agent == "writer":
+        return (
+            "Eres un agente redactor profesional. Genera documentos en markdown bien estructurados "
+            f"basándote en el contexto del vault. Empieza directamente con el documento.{mem}\n\nCONTEXTO:\n{context}"
+        )
+    if agent == "analyst":
+        return (
+            "Eres un agente analítico. Analiza la información y genera informes con conclusiones claras. "
+            f"Usa tablas y listas cuando sea útil.{mem}\n\nCONTEXTO:\n{context}"
+        )
+    return f"Eres un asistente útil y conciso.{mem}"
+
+
+async def _stream_agent(agent: str, messages: list[BaseMessage], model: str):
+    query = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    memory = load_memory()
+
+    cached = cache_get(query, agent)
+    if cached:
+        yield _sse_chunk(cached, model)
+        yield _sse_chunk(_AGENT_BADGE.format(agent=agent), model)
+        yield _sse_chunk("", model, finish=True)
+        yield "data: [DONE]\n\n"
+        return
+
+    context = await _build_context(agent, query)
+    system = _system_prompt(agent, context, memory)
     llm = _get_llm(AGENT_MODELS.get(agent, "chat"))
 
     full_response = []
@@ -119,12 +137,14 @@ async def _stream_agent(agent: str, messages: list[BaseMessage], model: str):
             full_response.append(token)
             yield _sse_chunk(token, model)
 
+    badge = _AGENT_BADGE.format(agent=agent)
+    yield _sse_chunk(badge, model)
     yield _sse_chunk("", model, finish=True)
     yield "data: [DONE]\n\n"
 
-    collected = "".join(full_response)
+    collected = "".join(full_response) + badge
     cache_set(query, agent, collected)
-    await asyncio.to_thread(save_memory, messages, collected)
+    await asyncio.to_thread(save_memory, messages, "".join(full_response))
 
 
 @router.post("/chat/completions")
@@ -137,7 +157,6 @@ async def chat_completions(request: Request, _: str = Depends(require_bearer_key
     recent = raw_messages[-20:] if len(raw_messages) > 20 else raw_messages
     lc_messages = _convert_messages(recent)
 
-    # Route first (always synchronous, fast)
     state = {"messages": lc_messages, "agent_used": ""}
     route_result = await asyncio.to_thread(router_node, state)
     agent = route_result["agent_used"]
@@ -148,40 +167,34 @@ async def chat_completions(request: Request, _: str = Depends(require_bearer_key
             media_type="text/event-stream",
         )
 
-    # Non-streamable agents (task, complete) or non-stream request
     if agent in _STREAMABLE:
-        # Non-stream path for streamable agents
         query = next((m.content for m in reversed(lc_messages) if isinstance(m, HumanMessage)), "")
         memory = load_memory()
         cached = cache_get(query, agent)
         if cached:
             return _wrap_openai(cached, model, agent)
 
-        context = ""
-        if agent in ("research", "writer", "analyst"):
-            context = await asyncio.to_thread(search_vault.invoke, query)
-            if agent == "analyst":
-                tasks_info = await asyncio.to_thread(list_tasks.invoke, {"project": "", "status": ""})
-                context = f"{context}\n\nTAREAS EXISTENTES:\n{tasks_info}"
-
-        system = _build_system_prompt(agent, context, memory)
+        context = await _build_context(agent, query)
+        system = _system_prompt(agent, context, memory)
         llm = _get_llm(AGENT_MODELS.get(agent, "chat"))
         resp = await asyncio.to_thread(
             llm.invoke, [SystemMessage(content=system), *lc_messages]
         )
-        content = resp.content
+        badge = _AGENT_BADGE.format(agent=agent)
+        content = resp.content + badge
         cache_set(query, agent, content)
-        await asyncio.to_thread(save_memory, lc_messages, content)
+        await asyncio.to_thread(save_memory, lc_messages, resp.content)
         return _wrap_openai(content, model, agent)
 
-    # task / complete — use full graph
+    # task / complete
     result = await asyncio.to_thread(
         graph.invoke,
         {"messages": lc_messages, "agent_used": agent},
     )
     ai_msgs = [m for m in result["messages"] if isinstance(m, AIMessage)]
-    content = ai_msgs[-1].content if ai_msgs else "Sin respuesta"
     agent_used = result.get("agent_used", agent)
+    badge = _AGENT_BADGE.format(agent=agent_used)
+    content = (ai_msgs[-1].content if ai_msgs else "Sin respuesta") + badge
 
     if do_stream:
         async def _wrap_stream():

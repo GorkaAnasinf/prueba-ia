@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
 from ..config import settings
-from .tools import search_vault, create_task, complete_task, list_tasks, save_doc_to_vault
+from .tools import search_vault, web_search, create_task, complete_task, list_tasks, save_doc_to_vault
 
 MAX_TASKS_PER_CALL = 10
 
@@ -76,13 +76,27 @@ def router_node(state: AgentState) -> dict:
 
 def research_node(state: AgentState) -> dict:
     query = _last_user_message(state)
-    context = search_vault.invoke(query)
+    vault_ctx = search_vault.invoke(query)
+    web_ctx = web_search.invoke(query)
+
+    has_vault = "No se encontró" not in vault_ctx and "Error" not in vault_ctx
+    has_web = "No se encontraron" not in web_ctx and "Error" not in web_ctx
+
+    if has_vault and has_web:
+        context = f"[VAULT]\n{vault_ctx}\n\n[WEB]\n{web_ctx}"
+    elif has_vault:
+        context = vault_ctx
+    elif has_web:
+        context = f"[WEB]\n{web_ctx}"
+    else:
+        context = "No se encontró información relevante en el vault ni en la web."
+
     llm = _get_llm(AGENT_MODELS["research"])
     resp = llm.invoke([
         SystemMessage(content=(
-            "Eres un agente de investigación. Responde basándote SOLO en el contexto proporcionado. "
-            "Si el contexto no contiene la información, dilo claramente. "
-            "Cita el archivo fuente entre corchetes.\n\n"
+            "Eres un agente de investigación. Usa el contexto proporcionado (vault interno y/o web). "
+            "Indica la fuente entre corchetes: [archivo.md] para vault, [web] para resultados web. "
+            "Si no hay contexto relevante, dilo claramente.\n\n"
             f"CONTEXTO:\n{context}"
         )),
         *state["messages"],
