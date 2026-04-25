@@ -83,6 +83,16 @@ services:
       timeout: 5s
       retries: 5
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aiplatform-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   backend:
     build: ./backend
     container_name: aiplatform-backend
@@ -95,8 +105,11 @@ services:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@aiplatform-postgres:5432/${POSTGRES_DB}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@aiplatform-redis:6379
+      - QDRANT_URL=http://aiplatform-qdrant:6333
+      - OLLAMA_BASE_URL=http://aiplatform-ollama:11434
     volumes:
       - ./backend/app:/app/app
+      - ./obsidian-vault:/obsidian-vault:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,9 +117,12 @@ services:
         condition: service_healthy
       litellm:
         condition: service_started
+      qdrant:
+        condition: service_started
 
 volumes:
   ollama_data:
   open_webui_data:
   postgres_data:
   redis_data:
+  qdrant_data:

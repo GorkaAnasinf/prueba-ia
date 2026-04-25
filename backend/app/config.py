@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     litellm_master_key: str = "sk-change-me"
     database_url: str = "postgresql://aiplatform:password@aiplatform-postgres:5432/aiplatform"
     redis_url: str = "redis://:password@aiplatform-redis:6379"
+    qdrant_url: str = "http://aiplatform-qdrant:6333"
+    ollama_base_url: str = "http://aiplatform-ollama:11434"
+    embed_model: str = "nomic-embed-text"
+    rag_collection: str = "obsidian"
+    obsidian_vault_path: str = "/obsidian-vault"
 
     class Config:
         env_file = ".env"
