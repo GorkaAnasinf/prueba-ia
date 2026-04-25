@@ -109,7 +109,7 @@ services:
       - OLLAMA_BASE_URL=http://aiplatform-ollama:11434
     volumes:
       - ./backend/app:/app/app
-      - ./obsidian-vault:/obsidian-vault:ro
+      - ./obsidian-vault:/obsidian-vault
     depends_on:
       postgres:
         condition: service_healthy

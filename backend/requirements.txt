@@ -7,3 +7,6 @@ psycopg2-binary==2.9.9
 redis==5.1.1
 qdrant-client==1.9.1
 watchdog==4.0.1
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
