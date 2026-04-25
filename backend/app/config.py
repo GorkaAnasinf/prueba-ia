@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     embed_model: str = "nomic-embed-text"
     rag_collection: str = "obsidian"
     obsidian_vault_path: str = "/obsidian-vault"
+    git_repo_path: str = "/repo"
 
     class Config:
         env_file = ".env"

@@ -1,3 +1,5 @@
+import logging
+import subprocess
 from langchain_core.tools import tool
 from pathlib import Path
 from datetime import datetime
@@ -6,6 +8,8 @@ from ..config import settings
 from ..database import SessionLocal
 from ..models import Task
 from ..routers.rag import _embed, _qdrant, _ensure_collection
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -109,3 +113,15 @@ task_id: {task.id}
 - [ ] Pendiente
 """
     filepath.write_text(content, encoding="utf-8")
+    _git_push_vault(filepath.name)
+
+
+def _git_push_vault(filename: str):
+    repo = Path(settings.git_repo_path)
+    try:
+        subprocess.run(["git", "add", f"obsidian-vault/projects/{filename}"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", f"tasks: {filename}"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True, capture_output=True)
+        logger.info(f"Auto-pushed task: {filename}")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Git push failed: {e.stderr.decode()}")

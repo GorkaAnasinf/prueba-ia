@@ -110,6 +110,8 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./obsidian-vault:/obsidian-vault
+      - ./.git:/repo/.git
+      - ./obsidian-vault:/repo/obsidian-vault
     depends_on:
       postgres:
         condition: service_healthy
