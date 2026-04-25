@@ -1,10 +1,11 @@
+import json
+import re
 from typing import TypedDict, Annotated, Literal
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, BaseMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import create_react_agent
 
 from ..config import settings
 from .tools import search_vault, create_task, list_tasks
@@ -19,34 +20,6 @@ class RouteDecision(BaseModel):
     agent: Literal["research", "writer", "analyst", "task"]
 
 
-SYSTEM_PROMPTS = {
-    "research": (
-        "Eres un agente de investigación. Busca información en el vault de conocimiento "
-        "y responde con precisión basándote en los documentos encontrados. "
-        "Cita siempre el archivo fuente."
-    ),
-    "writer": (
-        "Eres un agente redactor. Generas documentos profesionales (propuestas, actas, correos, informes) "
-        "basándote en la información del vault. Usa formato markdown estructurado."
-    ),
-    "analyst": (
-        "Eres un agente analítico. Analiza múltiples proyectos, cruza información de diferentes fuentes "
-        "y genera informes con conclusiones claras. Usa tablas y listas cuando sea útil."
-    ),
-    "task": (
-        "Eres un agente de gestión de tareas. Analiza el contenido proporcionado, identifica acciones concretas "
-        "y crea las tareas correspondientes con título, descripción, responsable, fecha límite y proyecto. "
-        "Confirma cada tarea creada con sus detalles."
-    ),
-}
-
-AGENT_TOOLS = {
-    "research": [search_vault],
-    "writer": [search_vault],
-    "analyst": [search_vault, list_tasks],
-    "task": [search_vault, create_task, list_tasks],
-}
-
 AGENT_MODELS = {
     "research": "chat",
     "writer": "chat",
@@ -60,48 +33,158 @@ def _get_llm(model: str) -> ChatOpenAI:
         model=model,
         base_url=f"{settings.litellm_base_url}/v1",
         api_key=settings.litellm_master_key,
-        timeout=120,
+        timeout=180,
     )
 
 
+def _last_user_message(state: AgentState) -> str:
+    for m in reversed(state["messages"]):
+        if isinstance(m, HumanMessage):
+            return m.content
+    return ""
+
+
+# ── Router ────────────────────────────────────────────────────────────────────
+
 def router_node(state: AgentState) -> dict:
-    llm = _get_llm("reasoning")
-    structured = llm.with_structured_output(RouteDecision)
-    last_msg = state["messages"][-1].content
-
-    decision = structured.invoke([
+    llm = _get_llm("chat")
+    query = _last_user_message(state)
+    resp = llm.invoke([
         SystemMessage(content=(
-            "Clasifica la consulta en uno de estos agentes:\n"
-            "- research: preguntas sobre reuniones, acuerdos, información del vault\n"
-            "- writer: redactar documentos, propuestas, actas, correos\n"
-            "- analyst: análisis de proyectos, informes, comparativas, estado general\n"
-            "- task: crear tareas, extraer acciones de reuniones, listar pendientes\n"
-            "Responde solo con el nombre del agente."
+            "Clasifica la consulta del usuario en exactamente una de estas palabras:\n"
+            "research — preguntas sobre reuniones, acuerdos, información del vault\n"
+            "writer   — redactar documentos, propuestas, actas, correos\n"
+            "analyst  — análisis de proyectos, informes, comparativas, estado general\n"
+            "task     — crear tareas, extraer acciones de reuniones, listar pendientes\n\n"
+            "Responde SOLO con la palabra, sin explicación."
         )),
-        *state["messages"],
+        HumanMessage(content=query),
     ])
-    return {"agent_used": decision.agent}
+    raw = resp.content.strip().lower()
+    agent = raw if raw in ("research", "writer", "analyst", "task") else "research"
+    return {"agent_used": agent}
 
 
-def make_agent_node(agent_name: str):
-    def node(state: AgentState) -> dict:
-        llm = _get_llm(AGENT_MODELS[agent_name])
-        tools = AGENT_TOOLS[agent_name]
-        system = SYSTEM_PROMPTS[agent_name]
-        react_agent = create_react_agent(llm, tools)
-        messages = [SystemMessage(content=system)] + list(state["messages"])
-        result = react_agent.invoke({"messages": messages})
-        ai_msgs = [m for m in result["messages"] if isinstance(m, AIMessage)]
-        return {"messages": [ai_msgs[-1]], "agent_used": state.get("agent_used", agent_name)}
-    return node
+# ── Research agent ─────────────────────────────────────────────────────────────
 
+def research_node(state: AgentState) -> dict:
+    query = _last_user_message(state)
+    context = search_vault.invoke(query)
+    llm = _get_llm(AGENT_MODELS["research"])
+    resp = llm.invoke([
+        SystemMessage(content=(
+            "Eres un agente de investigación. Responde basándote SOLO en el contexto proporcionado. "
+            "Cita el archivo fuente entre corchetes.\n\n"
+            f"CONTEXTO:\n{context}"
+        )),
+        HumanMessage(content=query),
+    ])
+    return {"messages": [AIMessage(content=resp.content)], "agent_used": "research"}
+
+
+# ── Writer agent ───────────────────────────────────────────────────────────────
+
+def writer_node(state: AgentState) -> dict:
+    query = _last_user_message(state)
+    context = search_vault.invoke(query)
+    llm = _get_llm(AGENT_MODELS["writer"])
+    resp = llm.invoke([
+        SystemMessage(content=(
+            "Eres un agente redactor profesional. Genera documentos en markdown bien estructurados "
+            "basándote en el contexto del vault.\n\n"
+            f"CONTEXTO:\n{context}"
+        )),
+        HumanMessage(content=query),
+    ])
+    return {"messages": [AIMessage(content=resp.content)], "agent_used": "writer"}
+
+
+# ── Analyst agent ──────────────────────────────────────────────────────────────
+
+def analyst_node(state: AgentState) -> dict:
+    query = _last_user_message(state)
+    context = search_vault.invoke(query)
+    tasks_info = list_tasks.invoke({"project": "", "status": ""})
+    llm = _get_llm(AGENT_MODELS["analyst"])
+    resp = llm.invoke([
+        SystemMessage(content=(
+            "Eres un agente analítico. Analiza la información y genera informes con conclusiones claras. "
+            "Usa tablas y listas cuando sea útil.\n\n"
+            f"CONTEXTO DEL VAULT:\n{context}\n\n"
+            f"TAREAS EXISTENTES:\n{tasks_info}"
+        )),
+        HumanMessage(content=query),
+    ])
+    return {"messages": [AIMessage(content=resp.content)], "agent_used": "analyst"}
+
+
+# ── Task agent ─────────────────────────────────────────────────────────────────
+
+_TASK_SCHEMA = """
+Devuelve un JSON con esta estructura exacta (array de tareas):
+[
+  {
+    "title": "Título corto de la tarea",
+    "description": "Descripción detallada",
+    "responsible": "Nombre del responsable",
+    "due_date": "YYYY-MM-DD o texto como '2025-11-15'",
+    "project": "Nombre del proyecto",
+    "source_file": "archivo origen si se conoce"
+  }
+]
+Devuelve SOLO el JSON, sin texto adicional, sin markdown.
+"""
+
+def _extract_json(text: str) -> list:
+    text = text.strip()
+    match = re.search(r'\[.*\]', text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    return json.loads(text)
+
+
+def task_node(state: AgentState) -> dict:
+    query = _last_user_message(state)
+    context = search_vault.invoke(query)
+    llm = _get_llm(AGENT_MODELS["task"])
+
+    resp = llm.invoke([
+        SystemMessage(content=(
+            "Eres un agente de gestión de tareas. Analiza el contexto y extrae todas las acciones pendientes.\n\n"
+            f"CONTEXTO:\n{context}\n\n"
+            f"{_TASK_SCHEMA}"
+        )),
+        HumanMessage(content=query),
+    ])
+
+    created = []
+    errors = []
+    try:
+        tasks_data = _extract_json(resp.content)
+        for t in tasks_data:
+            result = create_task.invoke(t)
+            created.append(f"✓ {t['title']}")
+    except Exception as e:
+        errors.append(f"Error parseando tareas: {e}\nRespuesta del modelo:\n{resp.content}")
+
+    if created:
+        summary = f"Tareas creadas ({len(created)}):\n" + "\n".join(created)
+    else:
+        summary = "No se pudieron crear tareas.\n" + "\n".join(errors)
+
+    return {"messages": [AIMessage(content=summary)], "agent_used": "task"}
+
+
+# ── Graph ──────────────────────────────────────────────────────────────────────
 
 def build_graph():
     workflow = StateGraph(AgentState)
 
     workflow.add_node("router", router_node)
-    for name in ["research", "writer", "analyst", "task"]:
-        workflow.add_node(name, make_agent_node(name))
+    workflow.add_node("research", research_node)
+    workflow.add_node("writer", writer_node)
+    workflow.add_node("analyst", analyst_node)
+    workflow.add_node("task", task_node)
 
     workflow.add_edge(START, "router")
     workflow.add_conditional_edges(
