@@ -112,6 +112,8 @@ services:
       - ./obsidian-vault:/obsidian-vault
       - ./.git:/repo/.git
       - ./obsidian-vault:/repo/obsidian-vault
+      - ~/.gitconfig:/root/.gitconfig:ro
+      - ~/.git-credentials:/root/.git-credentials:ro
     depends_on:
       postgres:
         condition: service_healthy
