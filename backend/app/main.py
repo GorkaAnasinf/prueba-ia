@@ -1,12 +1,24 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from .config import settings
 from .database import engine
 from .models import Base
 from .routers import chat, conversations, rag, openai_compat
+from .watcher import start_watcher
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title=settings.app_name, version="0.4.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    observer = start_watcher()
+    yield
+    if observer:
+        observer.stop()
+        observer.join()
+
+
+app = FastAPI(title=settings.app_name, version="0.5.0", lifespan=lifespan)
 
 app.include_router(chat.router)
 app.include_router(conversations.router)

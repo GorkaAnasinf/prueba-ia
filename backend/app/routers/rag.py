@@ -67,11 +67,10 @@ class QueryResponse(BaseModel):
     results: list[QueryResult]
 
 
-@router.post("/ingest", response_model=IngestResponse)
-def ingest(_: str = Depends(require_api_key)):
+def do_ingest() -> IngestResponse:
     vault = Path(settings.obsidian_vault_path)
     if not vault.exists():
-        raise HTTPException(status_code=500, detail=f"Vault not found: {vault}")
+        raise FileNotFoundError(f"Vault not found: {vault}")
 
     client = _qdrant()
     _ensure_collection(client)
@@ -98,6 +97,14 @@ def ingest(_: str = Depends(require_api_key)):
         client.upsert(collection_name=settings.rag_collection, points=points)
 
     return IngestResponse(files_processed=files_processed, chunks_indexed=len(points))
+
+
+@router.post("/ingest", response_model=IngestResponse)
+def ingest(_: str = Depends(require_api_key)):
+    try:
+        return do_ingest()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/query", response_model=QueryResponse)
