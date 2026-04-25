@@ -1,4 +1,5 @@
 import logging
+import sys
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from .config import settings
@@ -8,6 +9,12 @@ from .routers import chat, conversations, rag, openai_compat, tasks, agent
 from .routers.rag import do_ingest
 from .watcher import start_watcher
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+)
 logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)

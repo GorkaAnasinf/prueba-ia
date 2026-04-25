@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import httpx
@@ -12,8 +13,8 @@ from ..config import settings
 router = APIRouter(prefix="/rag", tags=["rag"])
 
 VECTOR_SIZE = 768
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 150
+CHUNK_SIZE = 1200
+MIN_SCORE = 0.45
 
 
 def _qdrant() -> QdrantClient:
@@ -30,10 +31,24 @@ def _ensure_collection(client: QdrantClient):
 
 
 def _chunk(text: str) -> list[str]:
-    chunks, start = [], 0
-    while start < len(text):
-        chunks.append(text[start : start + CHUNK_SIZE])
-        start += CHUNK_SIZE - CHUNK_OVERLAP
+    sections = re.split(r'\n(?=#{1,3} )', text)
+    chunks = []
+    for section in sections:
+        if len(section) <= CHUNK_SIZE:
+            if section.strip():
+                chunks.append(section.strip())
+        else:
+            paragraphs = section.split('\n\n')
+            current = ""
+            for para in paragraphs:
+                if len(current) + len(para) + 2 <= CHUNK_SIZE:
+                    current = (current + "\n\n" + para).strip()
+                else:
+                    if current:
+                        chunks.append(current)
+                    current = para.strip()
+            if current:
+                chunks.append(current)
     return [c for c in chunks if c.strip()]
 
 
@@ -67,6 +82,11 @@ class QueryResponse(BaseModel):
     results: list[QueryResult]
 
 
+def _is_excluded(path: Path, vault: Path) -> bool:
+    rel = path.relative_to(vault)
+    return rel.parts[0].startswith("_")
+
+
 def do_ingest() -> IngestResponse:
     vault = Path(settings.obsidian_vault_path)
     if not vault.exists():
@@ -79,6 +99,8 @@ def do_ingest() -> IngestResponse:
     files_processed = 0
 
     for md_file in vault.rglob("*.md"):
+        if _is_excluded(md_file, vault):
+            continue
         try:
             content = md_file.read_text(encoding="utf-8")
             rel_path = str(md_file.relative_to(vault))
@@ -116,6 +138,7 @@ def query(req: QueryRequest, _: str = Depends(require_api_key)):
         collection_name=settings.rag_collection,
         query_vector=_embed(req.query),
         limit=req.top_k,
+        score_threshold=MIN_SCORE,
     )
 
     return QueryResponse(results=[

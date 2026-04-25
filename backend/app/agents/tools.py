@@ -7,7 +7,7 @@ from datetime import datetime
 from ..config import settings
 from ..database import SessionLocal
 from ..models import Task
-from ..routers.rag import _embed, _qdrant, _ensure_collection
+from ..routers.rag import _embed, _qdrant, _ensure_collection, MIN_SCORE
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +22,10 @@ def search_vault(query: str) -> str:
             collection_name=settings.rag_collection,
             query_vector=_embed(query),
             limit=5,
+            score_threshold=MIN_SCORE,
         )
         if not hits:
-            return "No se encontró información relevante."
+            return "No se encontró información relevante en el vault."
         return "\n\n---\n\n".join(
             f"[{h.payload['file']}]\n{h.payload['content']}" for h in hits
         )
@@ -52,11 +53,29 @@ def create_task(title: str, description: str, responsible: str, due_date: str, p
         db.commit()
         db.refresh(task)
         push_ok = _write_task_md(task)
-        suffix = "" if push_ok else " (⚠️ git push fallido — sync manual necesario)"
+        suffix = "" if push_ok else " (⚠️ git push fallido)"
         return f"Tarea creada: '{title}'{suffix}"
     except Exception as e:
         db.rollback()
         return f"Error al crear tarea: {e}"
+    finally:
+        db.close()
+
+
+@tool
+def complete_task(title: str) -> str:
+    """Marca una tarea como completada buscándola por título (búsqueda parcial)."""
+    db = SessionLocal()
+    try:
+        task = db.query(Task).filter(Task.title.ilike(f"%{title}%")).first()
+        if not task:
+            return f"No se encontró tarea con título similar a: '{title}'"
+        task.status = "done"
+        db.commit()
+        return f"Tarea marcada como completada: '{task.title}'"
+    except Exception as e:
+        db.rollback()
+        return f"Error al completar tarea: {e}"
     finally:
         db.close()
 
@@ -82,7 +101,27 @@ def list_tasks(project: str = "", status: str = "") -> str:
         db.close()
 
 
-def _write_task_md(task: Task):
+def save_doc_to_vault(title: str, content: str) -> bool:
+    vault = Path(settings.obsidian_vault_path)
+    knowledge_dir = vault / "knowledge" / "documents"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+
+    slug = title[:50].lower().replace(" ", "-").replace("/", "-")
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    filepath = knowledge_dir / f"{date_str}-{slug}.md"
+
+    full_content = f"""---
+tags: [documento, generado]
+fecha: {date_str}
+---
+
+{content}
+"""
+    filepath.write_text(full_content, encoding="utf-8")
+    return _git_push_vault(f"knowledge/documents/{filepath.name}", "docs")
+
+
+def _write_task_md(task: Task) -> bool:
     vault = Path(settings.obsidian_vault_path)
     projects_dir = vault / "projects"
     projects_dir.mkdir(exist_ok=True)
@@ -117,19 +156,22 @@ task_id: {task.id}
 - [ ] Pendiente
 """
     filepath.write_text(content, encoding="utf-8")
-    return _git_push_vault(filepath.name)
+    return _git_push_vault(f"obsidian-vault/projects/{filepath.name}", "tasks")
 
 
-def _git_push_vault(filename: str) -> bool:
+def _git_push_vault(relative_path: str, prefix: str = "vault") -> bool:
     repo = Path(settings.git_repo_path)
     try:
-        subprocess.run(["git", "add", f"obsidian-vault/projects/{filename}"], cwd=repo, check=True, capture_output=True)
-        result = subprocess.run(["git", "commit", "-m", f"tasks: {filename}"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "add", relative_path], cwd=repo, check=True, capture_output=True)
+        result = subprocess.run(
+            ["git", "commit", "-m", f"{prefix}: {Path(relative_path).name}"],
+            cwd=repo, capture_output=True,
+        )
         if result.returncode != 0 and b"nothing to commit" not in result.stdout:
             logger.warning(f"Git commit failed: {result.stderr.decode()}")
             return False
         subprocess.run(["git", "push", "origin", "main"], cwd=repo, check=True, capture_output=True)
-        logger.info(f"Auto-pushed task: {filename}")
+        logger.info(f"Auto-pushed: {relative_path}")
         return True
     except subprocess.CalledProcessError as e:
         logger.warning(f"Git push failed: {e.stderr.decode()}")
