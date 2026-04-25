@@ -61,8 +61,9 @@ async def chat_completions(request: Request, _: str = Depends(require_bearer_key
     query = _last_user_content(messages)
     model = body.get("model", "chat")
 
+    recent = messages[-6:] if len(messages) > 6 else messages
     result = graph.invoke({
-        "messages": _convert_messages(messages),
+        "messages": _convert_messages(recent),
         "agent_used": "",
     })
 
