@@ -43,8 +43,8 @@ services:
     volumes:
       - open_webui_data:/app/backend/data
     environment:
-      - OPENAI_API_BASE_URL=http://aiplatform-litellm:4000
-      - OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+      - OPENAI_API_BASE_URL=http://aiplatform-backend:8000/v1
+      - OPENAI_API_KEY=${API_KEY}
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
       - ENABLE_OLLAMA_API=false
     depends_on:
