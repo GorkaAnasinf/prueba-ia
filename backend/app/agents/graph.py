@@ -85,7 +85,7 @@ def research_node(state: AgentState) -> dict:
             "Cita el archivo fuente entre corchetes.\n\n"
             f"CONTEXTO:\n{context}"
         )),
-        HumanMessage(content=query),
+        *state["messages"],
     ])
     return {"messages": [AIMessage(content=resp.content)], "agent_used": "research"}
 
@@ -134,11 +134,10 @@ def analyst_node(state: AgentState) -> dict:
 # ── General agent ─────────────────────────────────────────────────────────────
 
 def general_node(state: AgentState) -> dict:
-    query = _last_user_message(state)
     llm = _get_llm("chat")
     resp = llm.invoke([
         SystemMessage(content="Eres un asistente útil y conciso."),
-        HumanMessage(content=query),
+        *state["messages"],
     ])
     return {"messages": [AIMessage(content=resp.content)], "agent_used": "general"}
 
