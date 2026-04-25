@@ -129,6 +129,16 @@ def ingest(_: str = Depends(require_api_key)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/reindex", response_model=IngestResponse)
+def reindex(_: str = Depends(require_api_key)):
+    try:
+        client = _qdrant()
+        client.delete_collection(settings.rag_collection)
+        return do_ingest()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest, _: str = Depends(require_api_key)):
     client = _qdrant()
