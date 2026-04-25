@@ -2,7 +2,7 @@ import time
 import uuid
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 import httpx
 
 from ..auth import require_bearer_key
@@ -12,11 +12,18 @@ from ..agents.graph import graph
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
 
-def _last_user_content(messages: list[dict]) -> str:
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            return m.get("content", "")
-    return ""
+def _convert_messages(messages: list[dict]) -> list[BaseMessage]:
+    result = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role == "user":
+            result.append(HumanMessage(content=content))
+        elif role == "assistant":
+            result.append(AIMessage(content=content))
+        elif role == "system":
+            result.append(SystemMessage(content=content))
+    return result
 
 
 def _wrap_openai(content: str, model: str, agent_used: str) -> dict:
@@ -55,7 +62,7 @@ async def chat_completions(request: Request, _: str = Depends(require_bearer_key
     model = body.get("model", "chat")
 
     result = graph.invoke({
-        "messages": [HumanMessage(content=query)],
+        "messages": _convert_messages(messages),
         "agent_used": "",
     })
 

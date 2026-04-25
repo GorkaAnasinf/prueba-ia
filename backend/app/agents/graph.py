@@ -48,17 +48,18 @@ def _last_user_message(state: AgentState) -> str:
 
 def router_node(state: AgentState) -> dict:
     llm = _get_llm("chat")
-    query = _last_user_message(state)
     resp = llm.invoke([
         SystemMessage(content=(
-            "Clasifica la consulta del usuario en exactamente una de estas palabras:\n"
-            "research — preguntas sobre reuniones, acuerdos, información del vault\n"
+            "Eres un clasificador de intenciones. Analiza el historial completo de la conversación "
+            "y clasifica el ÚLTIMO mensaje del usuario en exactamente una de estas palabras:\n"
+            "research — preguntas sobre información, reuniones, acuerdos, plazos, detalles\n"
             "writer   — redactar documentos, propuestas, actas, correos\n"
             "analyst  — análisis de proyectos, informes, comparativas, estado general\n"
-            "task     — crear tareas, extraer acciones de reuniones, listar pendientes\n\n"
+            "task     — SOLO si el usuario pide EXPLÍCITAMENTE crear o añadir tareas nuevas\n\n"
+            "IMPORTANTE: preguntas de seguimiento sobre tareas ya creadas son 'research', no 'task'.\n"
             "Responde SOLO con la palabra, sin explicación."
         )),
-        HumanMessage(content=query),
+        *state["messages"],
     ])
     raw = resp.content.strip().lower()
     agent = raw if raw in ("research", "writer", "analyst", "task") else "research"
