@@ -93,6 +93,18 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    container_name: aiplatform-speaches
+    restart: unless-stopped
+    ports:
+      - "8082:8000"
+    volumes:
+      - speaches_data:/root/.cache/huggingface
+    environment:
+      - ALLOW_ORIGINS=*
+    gpus: all
+
   searxng:
     image: searxng/searxng:latest
     container_name: aiplatform-searxng
@@ -135,6 +147,7 @@ services:
       - AI_PLATFORM_URL=http://aiplatform-backend:8000
 
       - TELEGRAM_CHAT_ID=${TELEGRAM_ADMIN_CHAT_ID:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,4 +192,5 @@ volumes:
   redis_data:
   qdrant_data:
   searxng_data:
+  speaches_data:
   n8n_data:

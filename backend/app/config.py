@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     obsidian_vault_path: str = "/obsidian-vault"
     git_repo_path: str = "/repo"
     searxng_url: str = "http://aiplatform-searxng:8080"
-    evolution_url: str = "http://aiplatform-evolution:8080"
-    evolution_api_key: str = "change-me-evolution-key"
+    speaches_url: str = "http://aiplatform-speaches:8000"
+    whisper_model: str = "Systran/faster-whisper-large-v3"
+    tts_model: str = "hexgrad/Kokoro-82M"
+    tts_voice: str = "af_heart"
 
     class Config:
         env_file = ".env"

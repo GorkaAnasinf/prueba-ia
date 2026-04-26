@@ -8,7 +8,7 @@
         }
       },
       "id": "node-sched-001",
-      "name": "Cada 5 segundos",
+      "name": "Cada 15 segundos",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1,
       "position": [240, 300]
@@ -26,7 +26,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "https://api.telegram.org/botPON_TU_TOKEN_AQUI/getUpdates",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/getUpdates",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -44,7 +44,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\n\nif (updates.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\n// Actualizar offset antes de procesar (evita duplicados si la ejecución tarda)\nstaticData.offset = updates[updates.length - 1].update_id + 1;\n\n// Filtrar solo mensajes de texto\nconst textUpdates = updates.filter(u => u.message && u.message.text);\n\n// Deduplicar: si el mismo usuario envió varios mensajes, solo procesar el último\nconst byUser = {};\nfor (const u of textUpdates) {\n  byUser[u.message.from.id] = u;\n}\nconst deduped = Object.values(byUser);\n\nconst messages = deduped.map(u => ({\n  json: {\n    skip: false,\n    chat_id: String(u.message.chat.id),\n    user_id: String(u.message.from.id),\n    username: u.message.from.first_name || '',\n    text: u.message.text\n  }\n}));\n\nreturn messages.length > 0 ? messages : [{ json: { skip: true } }];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\n\nif (updates.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\nstaticData.offset = updates[updates.length - 1].update_id + 1;\n\n// Aceptar texto y voz\nconst validUpdates = updates.filter(u => u.message && (u.message.text || u.message.voice));\n\n// Deduplicar por usuario (último mensaje gana)\nconst byUser = {};\nfor (const u of validUpdates) {\n  byUser[u.message.from.id] = u;\n}\nconst deduped = Object.values(byUser);\n\nconst messages = deduped.map(u => ({\n  json: {\n    skip: false,\n    chat_id: String(u.message.chat.id),\n    user_id: String(u.message.from.id),\n    username: u.message.from.first_name || '',\n    text: u.message.text || '',\n    is_voice: !!u.message.voice,\n    file_id: u.message.voice ? u.message.voice.file_id : ''\n  }\n}));\n\nreturn messages.length > 0 ? messages : [{ json: { skip: true } }];"
       },
       "id": "node-code-002",
       "name": "Procesar Updates",
@@ -74,6 +74,97 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true},
+          "conditions": [
+            {
+              "id": "cond-voice",
+              "leftValue": "={{ $json.is_voice }}",
+              "rightValue": true,
+              "operator": {"type": "boolean", "operation": "equals"}
+            }
+          ]
+        }
+      },
+      "id": "node-if-voice",
+      "name": "Es voz?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/getFile",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {"name": "file_id", "value": "={{ $json.file_id }}"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-http-getfile",
+      "name": "Obtener URL archivo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 140]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.telegram.org/file/bot{{ $env.TELEGRAM_BOT_TOKEN }}/{{ $json.result.file_path }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "node-http-download",
+      "name": "Descargar audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_PLATFORM_URL }}/audio/transcribe",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "={{ $env.AI_PLATFORM_API_KEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {"name": "file", "value": "={{ $binary.data }}", "parameterType": "formBinaryData"}
+          ]
+        },
+        "options": {"timeout": 120000}
+      },
+      "id": "node-http-transcribe",
+      "name": "Transcribir audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combinar datos del mensaje original con el texto transcrito\nconst procesar = $('Procesar Updates').item.json;\nconst transcripcion = $input.first().json.text || '';\nreturn [{\n  json: {\n    ...procesar,\n    text: transcripcion\n  }\n}];"
+      },
+      "id": "node-code-merge",
+      "name": "Merge texto voz",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 140]
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "={{ $env.AI_PLATFORM_URL }}/channels/message",
         "sendHeaders": true,
@@ -87,26 +178,62 @@
         "jsonBody": "={\n  \"channel\": \"telegram\",\n  \"user_id\": \"{{ $json.user_id }}\",\n  \"message\": \"{{ $json.text }}\",\n  \"username\": \"{{ $json.username }}\"\n}",
         "options": {"timeout": 120000}
       },
-      "id": "node-http-002",
-      "name": "AI Platform",
+      "id": "node-http-ai-text",
+      "name": "AI Platform (texto)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1340, 220]
+      "position": [1560, 320]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.telegram.org/botPON_TU_TOKEN_AQUI/sendMessage",
+        "url": "={{ $env.AI_PLATFORM_URL }}/channels/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "={{ $env.AI_PLATFORM_API_KEY }}"}
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\",\n  \"parse_mode\": \"Markdown\"\n}",
-        "options": {}
+        "jsonBody": "={\n  \"channel\": \"telegram\",\n  \"user_id\": \"{{ $json.user_id }}\",\n  \"message\": \"{{ $json.text }}\",\n  \"username\": \"{{ $json.username }}\"\n}",
+        "options": {"timeout": 120000}
       },
-      "id": "node-http-003",
-      "name": "Enviar Respuesta",
+      "id": "node-http-ai-voice",
+      "name": "AI Platform (voz)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1560, 220]
+      "position": [2440, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\"\n}",
+        "options": {}
+      },
+      "id": "node-http-send-text",
+      "name": "Enviar Respuesta (texto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\"\n}",
+        "options": {}
+      },
+      "id": "node-http-send-voice",
+      "name": "Enviar Respuesta (voz)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2660, 140]
     },
     {
       "parameters": {},
@@ -118,7 +245,7 @@
     }
   ],
   "connections": {
-    "Cada 5 segundos": {
+    "Cada 15 segundos": {
       "main": [[{"node": "Leer Offset", "type": "main", "index": 0}]]
     },
     "Leer Offset": {
@@ -132,16 +259,45 @@
     },
     "Hay mensajes": {
       "main": [
-        [{"node": "AI Platform", "type": "main", "index": 0}],
+        [{"node": "Es voz?", "type": "main", "index": 0}],
         [{"node": "Sin mensajes", "type": "main", "index": 0}]
       ]
     },
-    "AI Platform": {
-      "main": [[{"node": "Enviar Respuesta", "type": "main", "index": 0}]]
+    "Es voz?": {
+      "main": [
+        [{"node": "Obtener URL archivo", "type": "main", "index": 0}],
+        [{"node": "AI Platform (texto)", "type": "main", "index": 0}]
+      ]
+    },
+    "Obtener URL archivo": {
+      "main": [[{"node": "Descargar audio", "type": "main", "index": 0}]]
+    },
+    "Descargar audio": {
+      "main": [[{"node": "Transcribir audio", "type": "main", "index": 0}]]
+    },
+    "Transcribir audio": {
+      "main": [[{"node": "Merge texto voz", "type": "main", "index": 0}]]
+    },
+    "Merge texto voz": {
+      "main": [[{"node": "AI Platform (voz)", "type": "main", "index": 0}]]
+    },
+    "AI Platform (texto)": {
+      "main": [[{"node": "Enviar Respuesta (texto)", "type": "main", "index": 0}]]
+    },
+    "AI Platform (voz)": {
+      "main": [[{"node": "Enviar Respuesta (voz)", "type": "main", "index": 0}]]
     }
   },
   "active": false,
-  "settings": {"executionOrder": "v1"},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "executionTimeout": 300,
+    "timezone": "Europe/Madrid",
+    "maxExecutionsToKeep": 100,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
   "meta": {"templateCredsSetupCompleted": true},
   "id": "telegram-polling-workflow",
   "tags": [{"name": "ai-platform"}]

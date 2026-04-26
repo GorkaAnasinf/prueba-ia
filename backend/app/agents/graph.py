@@ -1,5 +1,6 @@
 import json
 import re
+import asyncio
 from typing import TypedDict, Annotated, Literal
 from pydantic import BaseModel
 from langchain_openai import ChatOpenAI
@@ -8,7 +9,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
 from ..config import settings
-from .tools import search_vault, web_search, create_task, complete_task, list_tasks, save_doc_to_vault
+from .tools import search_vault, web_search, create_task, complete_task, list_tasks, save_doc_to_vault, transcribe_youtube
 
 MAX_TASKS_PER_CALL = 10
 
@@ -19,7 +20,7 @@ class AgentState(TypedDict):
 
 
 class RouteDecision(BaseModel):
-    agent: Literal["research", "writer", "analyst", "task", "complete", "general"]
+    agent: Literal["research", "writer", "analyst", "task", "complete", "general", "youtube"]
 
 
 AGENT_MODELS = {
@@ -29,6 +30,7 @@ AGENT_MODELS = {
     "task": "reasoning",
     "complete": "chat",
     "general": "chat",
+    "youtube": "chat",
 }
 
 
@@ -61,6 +63,7 @@ def router_node(state: AgentState) -> dict:
             "analyst   — análisis de proyectos, comparativas, estado general de múltiples proyectos\n"
             "task      — SOLO si pide EXPLÍCITAMENTE crear tareas nuevas\n"
             "complete  — marcar tareas como completadas, cambiar estado de tareas\n"
+            "youtube   — el usuario envía una URL de YouTube para transcribir o analizar el vídeo\n"
             "general   — conversación general, saludos, preguntas sin relación al vault\n\n"
             "IMPORTANTE: preguntas de seguimiento sobre tareas ya creadas son 'research', no 'task'.\n"
             "Responde SOLO con la palabra, sin explicación."
@@ -68,7 +71,7 @@ def router_node(state: AgentState) -> dict:
         *state["messages"],
     ])
     raw = resp.content.strip().lower()
-    agent = raw if raw in ("research", "writer", "analyst", "task", "complete", "general") else "general"
+    agent = raw if raw in ("research", "writer", "analyst", "task", "complete", "general", "youtube") else "general"
     return {"agent_used": agent}
 
 
@@ -242,6 +245,34 @@ def task_node(state: AgentState) -> dict:
     return {"messages": [AIMessage(content=summary)], "agent_used": "task"}
 
 
+# ── YouTube agent ──────────────────────────────────────────────────────────────
+
+_YT_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w\-]+")
+
+
+def youtube_node(state: AgentState) -> dict:
+    query = _last_user_message(state)
+    match = _YT_URL_RE.search(query)
+    if not match:
+        return {
+            "messages": [AIMessage(content="No encontré una URL de YouTube válida en tu mensaje.")],
+            "agent_used": "youtube",
+        }
+    url = match.group()
+    result = transcribe_youtube.invoke({"url": url})
+
+    llm = _get_llm(AGENT_MODELS["youtube"])
+    resp = llm.invoke([
+        SystemMessage(content=(
+            "Eres un asistente que ayuda a entender el contenido de vídeos de YouTube. "
+            "El usuario ha enviado un vídeo y aquí está la transcripción. "
+            "Resume el contenido y extrae los puntos clave de forma clara y estructurada."
+        )),
+        HumanMessage(content=f"Transcripción del vídeo:\n\n{result}"),
+    ])
+    return {"messages": [AIMessage(content=resp.content)], "agent_used": "youtube"}
+
+
 # ── Graph ──────────────────────────────────────────────────────────────────────
 
 def build_graph():
@@ -254,6 +285,7 @@ def build_graph():
     workflow.add_node("task", task_node)
     workflow.add_node("complete", complete_node)
     workflow.add_node("general", general_node)
+    workflow.add_node("youtube", youtube_node)
 
     workflow.add_edge(START, "router")
     workflow.add_conditional_edges(
@@ -266,9 +298,10 @@ def build_graph():
             "task": "task",
             "complete": "complete",
             "general": "general",
+            "youtube": "youtube",
         },
     )
-    for name in ["research", "writer", "analyst", "task", "complete", "general"]:
+    for name in ["research", "writer", "analyst", "task", "complete", "general", "youtube"]:
         workflow.add_edge(name, END)
 
     return workflow.compile()

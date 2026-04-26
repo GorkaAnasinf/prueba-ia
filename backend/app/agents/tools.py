@@ -1,6 +1,9 @@
 import logging
+import re
 import subprocess
+import tempfile
 import httpx
+import yt_dlp
 from langchain_core.tools import tool
 from pathlib import Path
 from datetime import datetime
@@ -117,6 +120,57 @@ def list_tasks(project: str = "", status: str = "") -> str:
         return f"Error al listar tareas: {e}"
     finally:
         db.close()
+
+
+@tool
+def transcribe_youtube(url: str) -> str:
+    """Descarga un vídeo de YouTube, transcribe el audio con Whisper y guarda la transcripción en el vault."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": f"{tmp}/audio.%(ext)s",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "96",
+            }],
+            "quiet": True,
+            "no_warnings": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title", "youtube-video")
+        except Exception as e:
+            return f"Error descargando vídeo: {e}"
+
+        audio_path = Path(tmp) / "audio.mp3"
+        if not audio_path.exists():
+            return "Error: no se pudo descargar el audio"
+        audio_bytes = audio_path.read_bytes()
+
+    try:
+        files = {"file": ("audio.mp3", audio_bytes, "audio/mpeg")}
+        data = {"model": settings.whisper_model, "response_format": "text"}
+        with httpx.Client(timeout=180) as client:
+            resp = client.post(f"{settings.speaches_url}/v1/audio/transcriptions", files=files, data=data)
+            resp.raise_for_status()
+        transcript = resp.text.strip()
+    except Exception as e:
+        return f"Error transcribiendo: {e}"
+
+    vault = Path(settings.obsidian_vault_path)
+    yt_dir = vault / "knowledge" / "youtube"
+    yt_dir.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^\w\-]", "-", title[:50].lower())
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    filepath = yt_dir / f"{date_str}-{slug}.md"
+    filepath.write_text(
+        f"---\ntags: [youtube, transcripcion]\nfecha: {date_str}\nurl: {url}\n---\n\n# {title}\n\n{transcript}\n",
+        encoding="utf-8",
+    )
+    _git_push_vault(f"obsidian-vault/knowledge/youtube/{filepath.name}", "youtube")
+    return f"Transcripción guardada: {filepath.name}\n\n{transcript[:1000]}{'...' if len(transcript) > 1000 else ''}"
 
 
 def save_doc_to_vault(title: str, content: str) -> bool:
