@@ -102,7 +102,7 @@ services:
     volumes:
       - speaches_data:/root/.cache/huggingface
     environment:
-      - ALLOW_ORIGINS=*
+      - ALLOW_ORIGINS=["*"]
     gpus: all
 
   searxng:
