@@ -128,7 +128,7 @@ services:
       - CACHE_REDIS_PREFIX_KEY=evolution
       - QRCODE_LIMIT=30
       - QRCODE_EXPIRATION_LIMIT=30
-      - LOG_LEVEL=ERROR
+      - LOG_LEVEL=INFO
     depends_on:
       postgres:
         condition: service_healthy
