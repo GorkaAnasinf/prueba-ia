@@ -119,7 +119,7 @@ services:
       speaches:
         condition: service_healthy
     command: >
-      sh -c "curl -s -X POST 'http://aiplatform-speaches:8000/v1/models/Systran%2Ffaster-whisper-large-v2' && echo 'Whisper model download initiated'"
+      sh -c "curl -s -X POST 'http://aiplatform-speaches:8000/v1/models/Systran%2Ffaster-whisper-large-v3' && echo 'Whisper model download initiated'"
 
   searxng:
     image: searxng/searxng:latest
