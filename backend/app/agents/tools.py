@@ -141,22 +141,29 @@ def transcribe_youtube(url: str) -> str:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 title = info.get("title", "youtube-video")
+            logger.info(f"yt-dlp descargado: {title}")
         except Exception as e:
+            logger.error(f"yt-dlp error: {e}")
             return f"Error descargando vídeo: {e}"
 
         audio_path = Path(tmp) / "audio.mp3"
         if not audio_path.exists():
+            logger.error(f"Audio no encontrado en {audio_path}")
             return "Error: no se pudo descargar el audio"
         audio_bytes = audio_path.read_bytes()
+        logger.info(f"Audio descargado: {len(audio_bytes)} bytes")
 
     try:
         files = {"file": ("audio.mp3", audio_bytes, "audio/mpeg")}
         data = {"model": settings.whisper_model, "response_format": "text"}
+        logger.info(f"Enviando a Speaches: {settings.speaches_url}")
         with httpx.Client(timeout=180) as client:
             resp = client.post(f"{settings.speaches_url}/v1/audio/transcriptions", files=files, data=data)
             resp.raise_for_status()
         transcript = resp.text.strip()
+        logger.info(f"Transcripción OK: {len(transcript)} chars")
     except Exception as e:
+        logger.error(f"Speaches error: {e}")
         return f"Error transcribiendo: {e}"
 
     vault = Path(settings.obsidian_vault_path)
