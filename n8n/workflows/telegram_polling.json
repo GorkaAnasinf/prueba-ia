@@ -44,7 +44,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\n\nif (updates.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\nstaticData.offset = updates[updates.length - 1].update_id + 1;\n\n// Aceptar texto y voz\nconst validUpdates = updates.filter(u => u.message && (u.message.text || u.message.voice));\n\n// Deduplicar por usuario (último mensaje gana)\nconst byUser = {};\nfor (const u of validUpdates) {\n  byUser[u.message.from.id] = u;\n}\nconst deduped = Object.values(byUser);\n\nconst messages = deduped.map(u => ({\n  json: {\n    skip: false,\n    chat_id: String(u.message.chat.id),\n    user_id: String(u.message.from.id),\n    username: u.message.from.first_name || '',\n    text: u.message.text || '',\n    is_voice: !!u.message.voice,\n    file_id: u.message.voice ? u.message.voice.file_id : ''\n  }\n}));\n\nreturn messages.length > 0 ? messages : [{ json: { skip: true } }];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\n\nif (updates.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\nstaticData.offset = updates[updates.length - 1].update_id + 1;\n\n// Aceptar texto y voz\nconst validUpdates = updates.filter(u => u.message && (u.message.text || u.message.voice));\n\n// Deduplicar por usuario (último mensaje gana)\nconst byUser = {};\nfor (const u of validUpdates) {\n  byUser[u.message.from.id] = u;\n}\nconst deduped = Object.values(byUser);\n\nconst ytRegex = /https?:\\/\\/(www\\.)?(youtube\\.com\\/watch\\?v=|youtu\\.be\\/)[-\\w]+/;\n\nconst messages = deduped.map(u => ({\n  json: {\n    skip: false,\n    chat_id: String(u.message.chat.id),\n    user_id: String(u.message.from.id),\n    username: u.message.from.first_name || '',\n    text: u.message.text || '',\n    is_voice: !!u.message.voice,\n    is_youtube: !!(u.message.text && ytRegex.test(u.message.text)),\n    file_id: u.message.voice ? u.message.voice.file_id : ''\n  }\n}));\n\nreturn messages.length > 0 ? messages : [{ json: { skip: true } }];"
       },
       "id": "node-code-002",
       "name": "Procesar Updates",
@@ -91,6 +91,113 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true},
+          "conditions": [
+            {
+              "id": "cond-yt",
+              "leftValue": "={{ $json.is_youtube }}",
+              "rightValue": true,
+              "operator": {"type": "boolean", "operation": "equals"}
+            }
+          ]
+        }
+      },
+      "id": "node-if-youtube",
+      "name": "Es YouTube?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $json.chat_id }}\",\n  \"text\": \"Procesando el video de YouTube... esto puede tardar varios minutos. Te aviso cuando este listo.\"\n}",
+        "options": {}
+      },
+      "id": "node-http-yt-ack",
+      "name": "Aviso YouTube",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_PLATFORM_URL }}/channels/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "={{ $env.AI_PLATFORM_API_KEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"telegram\",\n  \"user_id\": \"{{ $('Procesar Updates').item.json.user_id }}\",\n  \"message\": \"{{ $('Procesar Updates').item.json.text }}\",\n  \"username\": \"{{ $('Procesar Updates').item.json.username }}\"\n}",
+        "options": {"timeout": 600000}
+      },
+      "id": "node-http-ai-youtube",
+      "name": "AI Platform (YouTube)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_PLATFORM_URL }}/channels/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {"name": "X-API-Key", "value": "={{ $env.AI_PLATFORM_API_KEY }}"}
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"telegram\",\n  \"user_id\": \"{{ $json.user_id }}\",\n  \"message\": \"{{ $json.text }}\",\n  \"username\": \"{{ $json.username }}\"\n}",
+        "options": {"timeout": 120000}
+      },
+      "id": "node-http-ai-text",
+      "name": "AI Platform (texto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1780, 440]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\"\n}",
+        "options": {}
+      },
+      "id": "node-http-send-youtube",
+      "name": "Enviar Respuesta (YouTube)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2220, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\"\n}",
+        "options": {}
+      },
+      "id": "node-http-send-text",
+      "name": "Enviar Respuesta (texto)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 440]
     },
     {
       "parameters": {
@@ -155,34 +262,13 @@
     },
     {
       "parameters": {
-        "jsCode": "// Combinar datos del mensaje original con el texto transcrito\nconst procesar = $('Procesar Updates').item.json;\nconst transcripcion = $input.first().json.text || '';\nreturn [{\n  json: {\n    ...procesar,\n    text: transcripcion\n  }\n}];"
+        "jsCode": "const procesar = $('Procesar Updates').item.json;\nconst transcripcion = $input.first().json.text || '';\nreturn [{\n  json: {\n    ...procesar,\n    text: transcripcion\n  }\n}];"
       },
       "id": "node-code-merge",
       "name": "Merge texto voz",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [2220, 140]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ $env.AI_PLATFORM_URL }}/channels/message",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {"name": "X-API-Key", "value": "={{ $env.AI_PLATFORM_API_KEY }}"}
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"channel\": \"telegram\",\n  \"user_id\": \"{{ $json.user_id }}\",\n  \"message\": \"{{ $json.text }}\",\n  \"username\": \"{{ $json.username }}\"\n}",
-        "options": {"timeout": 120000}
-      },
-      "id": "node-http-ai-text",
-      "name": "AI Platform (texto)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [1560, 320]
     },
     {
       "parameters": {
@@ -214,21 +300,6 @@
         "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\"\n}",
         "options": {}
       },
-      "id": "node-http-send-text",
-      "name": "Enviar Respuesta (texto)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [1780, 320]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"chat_id\": \"{{ $('Procesar Updates').item.json.chat_id }}\",\n  \"text\": \"{{ $json.response }}\"\n}",
-        "options": {}
-      },
       "id": "node-http-send-voice",
       "name": "Enviar Respuesta (voz)",
       "type": "n8n-nodes-base.httpRequest",
@@ -241,7 +312,7 @@
       "name": "Sin mensajes",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [1340, 420]
+      "position": [1340, 500]
     }
   ],
   "connections": {
@@ -266,8 +337,23 @@
     "Es voz?": {
       "main": [
         [{"node": "Obtener URL archivo", "type": "main", "index": 0}],
+        [{"node": "Es YouTube?", "type": "main", "index": 0}]
+      ]
+    },
+    "Es YouTube?": {
+      "main": [
+        [{"node": "Aviso YouTube", "type": "main", "index": 0}],
         [{"node": "AI Platform (texto)", "type": "main", "index": 0}]
       ]
+    },
+    "Aviso YouTube": {
+      "main": [[{"node": "AI Platform (YouTube)", "type": "main", "index": 0}]]
+    },
+    "AI Platform (YouTube)": {
+      "main": [[{"node": "Enviar Respuesta (YouTube)", "type": "main", "index": 0}]]
+    },
+    "AI Platform (texto)": {
+      "main": [[{"node": "Enviar Respuesta (texto)", "type": "main", "index": 0}]]
     },
     "Obtener URL archivo": {
       "main": [[{"node": "Descargar audio", "type": "main", "index": 0}]]
@@ -281,9 +367,6 @@
     "Merge texto voz": {
       "main": [[{"node": "AI Platform (voz)", "type": "main", "index": 0}]]
     },
-    "AI Platform (texto)": {
-      "main": [[{"node": "Enviar Respuesta (texto)", "type": "main", "index": 0}]]
-    },
     "AI Platform (voz)": {
       "main": [[{"node": "Enviar Respuesta (voz)", "type": "main", "index": 0}]]
     }
@@ -292,7 +375,7 @@
   "settings": {
     "executionOrder": "v1",
     "saveManualExecutions": true,
-    "executionTimeout": 300,
+    "executionTimeout": 700,
     "timezone": "Europe/Madrid",
     "maxExecutionsToKeep": 100,
     "callerPolicy": "workflowsFromSameOwner",
