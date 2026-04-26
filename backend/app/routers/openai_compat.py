@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 import uuid
 from fastapi import APIRouter, Depends, Request
@@ -10,9 +11,11 @@ import httpx
 from ..auth import require_bearer_key
 from ..config import settings
 from ..agents.graph import graph, router_node, AGENT_MODELS, _get_llm
-from ..agents.tools import search_vault, web_search, list_tasks
+from ..agents.tools import search_vault, web_search, list_tasks, transcribe_youtube
 from ..cache import cache_get, cache_set
 from ..memory import load_memory, save_memory
+
+_YT_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w\-]+")
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
 
@@ -122,6 +125,59 @@ _AGENT_STEPS = {
 }
 
 
+async def _stream_youtube(url: str, messages: list[BaseMessage], model: str):
+    yield _sse_chunk("<think>\nAgente seleccionado: **youtube**\n", model)
+    yield _sse_chunk("Descargando audio del video de YouTube...\n", model)
+
+    done_event = asyncio.Event()
+    result_box: list[str] = []
+
+    async def _run():
+        r = await asyncio.to_thread(transcribe_youtube.invoke, {"url": url})
+        result_box.append(r)
+        done_event.set()
+
+    task = asyncio.create_task(_run())
+
+    elapsed = 0
+    while not done_event.is_set():
+        await asyncio.sleep(15)
+        elapsed += 15
+        if not done_event.is_set():
+            yield _sse_chunk(f"Transcribiendo con Whisper... ({elapsed}s)\n", model)
+
+    await task
+    result = result_box[0] if result_box else "Error en transcripción"
+
+    if result.startswith("Error"):
+        yield _sse_chunk(f"{result}\n</think>\n\n", model)
+        yield _sse_chunk(result, model)
+        yield _sse_chunk("", model, finish=True)
+        yield "data: [DONE]\n\n"
+        return
+
+    yield _sse_chunk("✓ Transcripción completada. Generando resumen...\n</think>\n\n", model)
+
+    llm = _get_llm("chat")
+    full_response = []
+    async for chunk in llm.astream([
+        SystemMessage(content=(
+            "Eres un asistente que ayuda a entender el contenido de vídeos de YouTube. "
+            "Resume el contenido y extrae los puntos clave de forma clara y estructurada en markdown."
+        )),
+        HumanMessage(content=f"Transcripción del vídeo:\n\n{result}"),
+    ]):
+        token = chunk.content
+        if token:
+            full_response.append(token)
+            yield _sse_chunk(token, model)
+
+    badge = _AGENT_BADGE.format(agent="youtube")
+    yield _sse_chunk(badge, model)
+    yield _sse_chunk("", model, finish=True)
+    yield "data: [DONE]\n\n"
+
+
 async def _stream_agent(agent: str, messages: list[BaseMessage], model: str):
     query = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
     memory = load_memory()
@@ -192,6 +248,18 @@ async def chat_completions(request: Request, _: str = Depends(require_bearer_key
     state = {"messages": lc_messages, "agent_used": ""}
     route_result = await asyncio.to_thread(router_node, state)
     agent = route_result["agent_used"]
+
+    if agent == "youtube":
+        query = next((m.content for m in reversed(lc_messages) if isinstance(m, HumanMessage)), "")
+        match = _YT_URL_RE.search(query)
+        url = match.group() if match else ""
+        if do_stream:
+            return StreamingResponse(
+                _stream_youtube(url, lc_messages, model),
+                media_type="text/event-stream",
+            )
+        result = await asyncio.to_thread(transcribe_youtube.invoke, {"url": url})
+        return _wrap_openai(result, model, "youtube")
 
     if do_stream and agent in _STREAMABLE:
         return StreamingResponse(
