@@ -100,7 +100,7 @@ services:
     ports:
       - "8082:8000"
     volumes:
-      - speaches_data:/root/.cache/huggingface
+      - speaches_data:/home/ubuntu/.cache/huggingface
     environment:
       - ALLOW_ORIGINS=["*"]
       - WHISPER_COMPUTE_TYPE=int8
