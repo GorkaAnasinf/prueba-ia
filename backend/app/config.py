@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     git_repo_path: str = "/repo"
     searxng_url: str = "http://aiplatform-searxng:8080"
     speaches_url: str = "http://aiplatform-speaches:8000"
-    whisper_model: str = "Systran/faster-whisper-large-v3"
+    whisper_model: str = "Systran/faster-whisper-large-v2"
     tts_model: str = "hexgrad/Kokoro-82M"
     tts_voice: str = "af_heart"
 

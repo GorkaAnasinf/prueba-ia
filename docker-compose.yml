@@ -104,7 +104,6 @@ services:
     environment:
       - ALLOW_ORIGINS=["*"]
       - WHISPER_COMPUTE_TYPE=int8
-      - WHISPER_DEVICE=cpu
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
@@ -120,7 +119,7 @@ services:
       speaches:
         condition: service_healthy
     command: >
-      sh -c "curl -s -X POST 'http://aiplatform-speaches:8000/v1/models/Systran%2Ffaster-whisper-large-v3' && echo 'Whisper model download initiated'"
+      sh -c "curl -s -X POST 'http://aiplatform-speaches:8000/v1/models/Systran%2Ffaster-whisper-large-v2' && echo 'Whisper model download initiated'"
 
   searxng:
     image: searxng/searxng:latest
