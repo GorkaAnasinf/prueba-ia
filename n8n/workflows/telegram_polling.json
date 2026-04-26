@@ -4,7 +4,7 @@
     {
       "parameters": {
         "rule": {
-          "interval": [{"field": "seconds", "secondsInterval": 5}]
+          "interval": [{"field": "seconds", "secondsInterval": 15}]
         }
       },
       "id": "node-sched-001",
@@ -44,7 +44,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\n\nif (updates.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\n// Actualizar offset para la próxima ejecución\nstaticData.offset = updates[updates.length - 1].update_id + 1;\n\n// Filtrar solo mensajes de texto\nconst messages = updates\n  .filter(u => u.message && u.message.text)\n  .map(u => ({\n    json: {\n      skip: false,\n      chat_id: String(u.message.chat.id),\n      user_id: String(u.message.from.id),\n      username: u.message.from.first_name || '',\n      text: u.message.text\n    }\n  }));\n\nreturn messages.length > 0 ? messages : [{ json: { skip: true } }];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst updates = $input.first().json.result || [];\n\nif (updates.length === 0) {\n  return [{ json: { skip: true } }];\n}\n\n// Actualizar offset antes de procesar (evita duplicados si la ejecución tarda)\nstaticData.offset = updates[updates.length - 1].update_id + 1;\n\n// Filtrar solo mensajes de texto\nconst textUpdates = updates.filter(u => u.message && u.message.text);\n\n// Deduplicar: si el mismo usuario envió varios mensajes, solo procesar el último\nconst byUser = {};\nfor (const u of textUpdates) {\n  byUser[u.message.from.id] = u;\n}\nconst deduped = Object.values(byUser);\n\nconst messages = deduped.map(u => ({\n  json: {\n    skip: false,\n    chat_id: String(u.message.chat.id),\n    user_id: String(u.message.from.id),\n    username: u.message.from.first_name || '',\n    text: u.message.text\n  }\n}));\n\nreturn messages.length > 0 ? messages : [{ json: { skip: true } }];"
       },
       "id": "node-code-002",
       "name": "Procesar Updates",
