@@ -105,7 +105,7 @@ services:
       - "8888:8080"
 
   evolution-api:
-    image: atendai/evolution-api:1.8.4
+    image: atendai/evolution-api:latest
     container_name: aiplatform-evolution
     restart: unless-stopped
     ports:
