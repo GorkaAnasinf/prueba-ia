@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from .config import settings
 from .database import engine
 from .models import Base
-from .routers import chat, conversations, rag, openai_compat, tasks, agent
+from .routers import chat, conversations, rag, openai_compat, tasks, agent, channels
 from .routers.rag import do_ingest
 from .watcher import start_watcher
 
@@ -43,6 +43,7 @@ app.include_router(rag.router)
 app.include_router(openai_compat.router)
 app.include_router(tasks.router)
 app.include_router(agent.router)
+app.include_router(channels.router)
 
 
 @app.get("/health")

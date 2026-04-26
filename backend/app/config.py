@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     obsidian_vault_path: str = "/obsidian-vault"
     git_repo_path: str = "/repo"
     searxng_url: str = "http://aiplatform-searxng:8080"
+    evolution_url: str = "http://aiplatform-evolution:8080"
+    evolution_api_key: str = "change-me-evolution-key"
 
     class Config:
         env_file = ".env"
