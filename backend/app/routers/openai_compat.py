@@ -144,7 +144,9 @@ async def _stream_youtube(url: str, messages: list[BaseMessage], model: str):
         await asyncio.sleep(15)
         elapsed += 15
         if not done_event.is_set():
-            yield _sse_chunk(f"Transcribiendo con Whisper... ({elapsed}s)\n", model)
+            mins, secs = divmod(elapsed, 60)
+            label = f"{mins}m {secs}s" if mins else f"{secs}s"
+            yield _sse_chunk(f"Transcribiendo con Whisper... ({label})\n", model)
 
     await task
     result = result_box[0] if result_box else "Error en transcripción"

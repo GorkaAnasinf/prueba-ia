@@ -157,7 +157,7 @@ def transcribe_youtube(url: str) -> str:
         files = {"file": ("audio.mp3", audio_bytes, "audio/mpeg")}
         data = {"model": settings.whisper_model, "response_format": "text"}
         logger.info(f"Enviando a Speaches: {settings.speaches_url}")
-        with httpx.Client(timeout=180) as client:
+        with httpx.Client(timeout=900) as client:
             resp = client.post(f"{settings.speaches_url}/v1/audio/transcriptions", files=files, data=data)
             resp.raise_for_status()
         transcript = resp.text.strip()

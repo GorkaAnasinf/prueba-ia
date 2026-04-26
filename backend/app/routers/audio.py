@@ -37,7 +37,7 @@ class YoutubeRequest(BaseModel):
 def _transcribe_bytes(audio_bytes: bytes, filename: str) -> str:
     files = {"file": (filename, audio_bytes, "audio/mpeg")}
     data = {"model": settings.whisper_model, "response_format": "text"}
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=900) as client:
         resp = client.post(f"{settings.speaches_url}/v1/audio/transcriptions", files=files, data=data)
         resp.raise_for_status()
     return resp.text.strip()
