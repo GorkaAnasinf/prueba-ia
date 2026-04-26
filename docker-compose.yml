@@ -104,15 +104,19 @@ services:
     ports:
       - "8888:8080"
 
-  wppconnect:
-    image: wppconnect/wppconnect-server:latest
-    container_name: aiplatform-wppconnect
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: aiplatform-waha
     restart: unless-stopped
     ports:
-      - "8081:21465"
+      - "8081:3000"
     volumes:
-      - wppconnect_data:/home/user/wppconnect-server/tokens
-      - ./wppconnect/config.json:/home/user/wppconnect-server/config.json:ro
+      - wppconnect_data:/app/.sessions
+    environment:
+      - WHATSAPP_DEFAULT_ENGINE=WEBJS
+      - WAHA_API_KEY=${WPPCONNECT_SECRET:-change-me-wpp-secret}
+      - WHATSAPP_HOOK_URL=http://aiplatform-n8n:5678/webhook/whatsapp
+      - WHATSAPP_HOOK_EVENTS=message
     shm_size: '1gb'
 
   n8n:
@@ -143,10 +147,9 @@ services:
       - EXECUTIONS_DATA_MAX_AGE=168
       - AI_PLATFORM_API_KEY=${API_KEY}
       - AI_PLATFORM_URL=http://aiplatform-backend:8000
-      - WPPCONNECT_URL=http://aiplatform-wppconnect:21465
-      - WPPCONNECT_SECRET=${WPPCONNECT_SECRET:-change-me-wpp-secret}
-      - WPPCONNECT_SESSION=mi-sesion
-      - WPPCONNECT_TOKEN=
+      - WAHA_URL=http://aiplatform-waha:3000
+      - WAHA_API_KEY=${WPPCONNECT_SECRET:-change-me-wpp-secret}
+      - WAHA_SESSION=default
       - TELEGRAM_CHAT_ID=${TELEGRAM_ADMIN_CHAT_ID:-}
     depends_on:
       postgres:
