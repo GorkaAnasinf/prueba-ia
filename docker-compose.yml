@@ -105,7 +105,7 @@ services:
       - "8888:8080"
 
   evolution-api:
-    image: atendai/evolution-api:v2.2.3
+    image: atendai/evolution-api:1.8.4
     container_name: aiplatform-evolution
     restart: unless-stopped
     ports:
@@ -117,17 +117,15 @@ services:
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-change-me-evolution-key}
       - DATABASE_ENABLED=true
-      - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@aiplatform-postgres:5432/evolution
-      - DATABASE_SAVE_DATA_INSTANCE=true
-      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
-      - DATABASE_SAVE_MESSAGE_UPDATE=true
-      - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_URI=redis://:${REDIS_PASSWORD}@aiplatform-redis:6379
-      - CACHE_REDIS_PREFIX_KEY=evolution
-      - LOG_LEVEL=ERROR
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_api
+      - REDIS_ENABLED=true
+      - REDIS_URI=redis://:${REDIS_PASSWORD}@aiplatform-redis:6379
+      - REDIS_PREFIX_KEY=evolution
+      - CONFIG_SESSION_PHONE_CLIENT=AI Platform
+      - CONFIG_SESSION_PHONE_NAME=Chrome
       - QRCODE_LIMIT=30
-      - QRCODE_EXPIRATION_LIMIT=30
+      - LOG_LEVEL=ERROR
     depends_on:
       postgres:
         condition: service_healthy
