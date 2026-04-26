@@ -12,3 +12,4 @@ langchain>=0.3.0
 langchain-openai>=0.2.0
 rank-bm25==0.2.2
 yt-dlp>=2024.0.0
+python-multipart>=0.0.9
