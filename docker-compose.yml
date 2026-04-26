@@ -103,6 +103,7 @@ services:
       - speaches_data:/home/ubuntu/.cache/huggingface
     environment:
       - ALLOW_ORIGINS=["*"]
+      - WHISPER_DEVICE=cuda
       - WHISPER_COMPUTE_TYPE=int8_float16
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
