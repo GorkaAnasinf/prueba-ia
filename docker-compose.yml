@@ -117,6 +117,9 @@ services:
       - WAHA_API_KEY=${WPPCONNECT_SECRET:-change-me-wpp-secret}
       - WHATSAPP_HOOK_URL=http://aiplatform-n8n:5678/webhook/whatsapp
       - WHATSAPP_HOOK_EVENTS=message
+      - WAHA_DASHBOARD_ENABLED=true
+      - WAHA_DASHBOARD_USERNAME=admin
+      - WAHA_DASHBOARD_PASSWORD=${WPPCONNECT_SECRET:-change-me-wpp-secret}
     shm_size: '1gb'
 
   n8n:
