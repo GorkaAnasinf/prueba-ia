@@ -9,7 +9,7 @@ services:
       - ollama_data:/root/.ollama
     environment:
       - OLLAMA_HOST=0.0.0.0:11434
-      - OLLAMA_KEEP_ALIVE=10m
+      - OLLAMA_KEEP_ALIVE=2m
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     gpus: all
@@ -103,6 +103,7 @@ services:
       - speaches_data:/root/.cache/huggingface
     environment:
       - ALLOW_ORIGINS=["*"]
+      - WHISPER_COMPUTE_TYPE=int8
     gpus: all
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
