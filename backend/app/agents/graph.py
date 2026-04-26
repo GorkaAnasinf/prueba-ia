@@ -9,7 +9,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
 from ..config import settings
-from .tools import search_vault, web_search, create_task, complete_task, list_tasks, save_doc_to_vault, transcribe_youtube
+from .tools import search_vault, web_search, create_task, complete_task, list_tasks, save_doc_to_vault, transcribe_youtube, save_youtube_summary_to_vault
 
 MAX_TASKS_PER_CALL = 10
 
@@ -249,6 +249,27 @@ def task_node(state: AgentState) -> dict:
 
 _YT_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w\-]+")
 
+_YOUTUBE_SUMMARY_PROMPT = """Eres un asistente especializado en generar notas de conocimiento estructuradas a partir de transcripciones de vídeos de YouTube.
+
+Dado el título y la transcripción, genera una nota en markdown con exactamente este formato:
+
+## Resumen ejecutivo
+[2-3 párrafos que capturen la esencia y el argumento principal del vídeo]
+
+## Puntos clave
+[7-10 bullet points con los conceptos e ideas más importantes]
+
+## Ideas accionables
+[3-5 acciones o takeaways prácticos que el espectador puede aplicar]
+
+## Conceptos y términos clave
+[Lista de conceptos, herramientas, personas o términos relevantes mencionados — útil para búsquedas futuras]
+
+## Citas destacadas
+[2-3 frases textuales o parafraseadas relevantes del vídeo]
+
+Escribe en el mismo idioma que la transcripción. Sé preciso, denso en información y útil para consultas futuras."""
+
 
 def youtube_node(state: AgentState) -> dict:
     query = _last_user_message(state)
@@ -259,18 +280,29 @@ def youtube_node(state: AgentState) -> dict:
             "agent_used": "youtube",
         }
     url = match.group()
-    result = transcribe_youtube.invoke({"url": url})
+    raw = transcribe_youtube.invoke({"url": url})
+
+    if raw.startswith("Error"):
+        return {"messages": [AIMessage(content=raw)], "agent_used": "youtube"}
+
+    try:
+        data = json.loads(raw)
+        title = data["title"]
+        transcript = data["transcript"]
+        video_url = data["url"]
+    except Exception as e:
+        return {"messages": [AIMessage(content=f"Error procesando transcripción: {e}")], "agent_used": "youtube"}
 
     llm = _get_llm(AGENT_MODELS["youtube"])
     resp = llm.invoke([
-        SystemMessage(content=(
-            "Eres un asistente que ayuda a entender el contenido de vídeos de YouTube. "
-            "El usuario ha enviado un vídeo y aquí está la transcripción. "
-            "Resume el contenido y extrae los puntos clave de forma clara y estructurada."
-        )),
-        HumanMessage(content=f"Transcripción del vídeo:\n\n{result}"),
+        SystemMessage(content=_YOUTUBE_SUMMARY_PROMPT),
+        HumanMessage(content=f"Título: {title}\n\nTranscripción:\n{transcript}"),
     ])
-    return {"messages": [AIMessage(content=resp.content)], "agent_used": "youtube"}
+    summary = resp.content
+    saved = save_youtube_summary_to_vault(title, video_url, summary)
+    status = "✅ Resumen guardado en el vault de Obsidian." if saved else "⚠️ Resumen generado pero no se pudo guardar en el vault."
+    content = f"{summary}\n\n---\n*{status}*"
+    return {"messages": [AIMessage(content=content)], "agent_used": "youtube"}
 
 
 # ── Graph ──────────────────────────────────────────────────────────────────────

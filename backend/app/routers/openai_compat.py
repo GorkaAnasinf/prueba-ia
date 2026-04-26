@@ -11,7 +11,7 @@ import httpx
 from ..auth import require_bearer_key
 from ..config import settings
 from ..agents.graph import graph, router_node, AGENT_MODELS, _get_llm
-from ..agents.tools import search_vault, web_search, list_tasks, transcribe_youtube
+from ..agents.tools import search_vault, web_search, list_tasks, transcribe_youtube, save_youtube_summary_to_vault
 from ..cache import cache_get, cache_set
 from ..memory import load_memory, save_memory
 
@@ -125,6 +125,28 @@ _AGENT_STEPS = {
 }
 
 
+_YOUTUBE_SUMMARY_PROMPT = """Eres un asistente especializado en generar notas de conocimiento estructuradas a partir de transcripciones de vídeos de YouTube.
+
+Dado el título y la transcripción, genera una nota en markdown con exactamente este formato:
+
+## Resumen ejecutivo
+[2-3 párrafos que capturen la esencia y el argumento principal del vídeo]
+
+## Puntos clave
+[7-10 bullet points con los conceptos e ideas más importantes]
+
+## Ideas accionables
+[3-5 acciones o takeaways prácticos que el espectador puede aplicar]
+
+## Conceptos y términos clave
+[Lista de conceptos, herramientas, personas o términos relevantes mencionados — útil para búsquedas futuras]
+
+## Citas destacadas
+[2-3 frases textuales o parafraseadas relevantes del vídeo]
+
+Escribe en el mismo idioma que la transcripción. Sé preciso, denso en información y útil para consultas futuras."""
+
+
 async def _stream_youtube(url: str, messages: list[BaseMessage], model: str):
     yield _sse_chunk("<think>\nAgente seleccionado: **youtube**\n", model)
     yield _sse_chunk("Descargando audio del video de YouTube...\n", model)
@@ -149,31 +171,44 @@ async def _stream_youtube(url: str, messages: list[BaseMessage], model: str):
             yield _sse_chunk(f"Transcribiendo con Whisper... ({label})\n", model)
 
     await task
-    result = result_box[0] if result_box else "Error en transcripción"
+    raw = result_box[0] if result_box else "Error en transcripción"
 
-    if result.startswith("Error"):
-        yield _sse_chunk(f"{result}\n</think>\n\n", model)
-        yield _sse_chunk(result, model)
+    if raw.startswith("Error"):
+        yield _sse_chunk(f"{raw}\n</think>\n\n", model)
+        yield _sse_chunk(raw, model)
         yield _sse_chunk("", model, finish=True)
         yield "data: [DONE]\n\n"
         return
 
-    yield _sse_chunk("✓ Transcripción completada. Generando resumen...\n</think>\n\n", model)
+    try:
+        data = json.loads(raw)
+        title = data["title"]
+        transcript = data["transcript"]
+        video_url = data["url"]
+    except Exception:
+        yield _sse_chunk("Error procesando transcripción.\n</think>\n\n", model)
+        yield _sse_chunk("", model, finish=True)
+        yield "data: [DONE]\n\n"
+        return
+
+    yield _sse_chunk(f"✓ Transcripción completada ({len(transcript)} caracteres).\nGenerando resumen estructurado...\n</think>\n\n", model)
 
     llm = _get_llm("chat")
-    full_response = []
+    summary_chunks = []
     async for chunk in llm.astream([
-        SystemMessage(content=(
-            "Eres un asistente que ayuda a entender el contenido de vídeos de YouTube. "
-            "Resume el contenido y extrae los puntos clave de forma clara y estructurada en markdown."
-        )),
-        HumanMessage(content=f"Transcripción del vídeo:\n\n{result}"),
+        SystemMessage(content=_YOUTUBE_SUMMARY_PROMPT),
+        HumanMessage(content=f"Título: {title}\n\nTranscripción:\n{transcript}"),
     ]):
         token = chunk.content
         if token:
-            full_response.append(token)
+            summary_chunks.append(token)
             yield _sse_chunk(token, model)
 
+    summary = "".join(summary_chunks)
+    saved = await asyncio.to_thread(save_youtube_summary_to_vault, title, video_url, summary)
+
+    status = "✅ Resumen guardado en el vault de Obsidian." if saved else "⚠️ Resumen generado pero no se pudo guardar en el vault."
+    yield _sse_chunk(f"\n\n---\n*{status}*", model)
     badge = _AGENT_BADGE.format(agent="youtube")
     yield _sse_chunk(badge, model)
     yield _sse_chunk("", model, finish=True)

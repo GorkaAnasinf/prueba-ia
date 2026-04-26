@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import subprocess
@@ -124,7 +125,7 @@ def list_tasks(project: str = "", status: str = "") -> str:
 
 @tool
 def transcribe_youtube(url: str) -> str:
-    """Descarga un vídeo de YouTube, transcribe el audio con Whisper y guarda la transcripción en el vault."""
+    """Descarga y transcribe un vídeo de YouTube con Whisper. Devuelve JSON con título y transcripción."""
     with tempfile.TemporaryDirectory() as tmp:
         ydl_opts = {
             "format": "bestaudio/best",
@@ -166,18 +167,35 @@ def transcribe_youtube(url: str) -> str:
         logger.error(f"Speaches error: {e}")
         return f"Error transcribiendo: {e}"
 
+    return json.dumps({"title": title, "url": url, "transcript": transcript}, ensure_ascii=False)
+
+
+def save_youtube_summary_to_vault(title: str, url: str, summary: str) -> bool:
+    """Guarda el resumen estructurado de un vídeo de YouTube en el vault de Obsidian."""
     vault = Path(settings.obsidian_vault_path)
     yt_dir = vault / "knowledge" / "youtube"
     yt_dir.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^\w\-]", "-", title[:50].lower())
     date_str = datetime.utcnow().strftime("%Y-%m-%d")
     filepath = yt_dir / f"{date_str}-{slug}.md"
-    filepath.write_text(
-        f"---\ntags: [youtube, transcripcion]\nfecha: {date_str}\nurl: {url}\n---\n\n# {title}\n\n{transcript}\n",
-        encoding="utf-8",
-    )
-    _git_push_vault(f"obsidian-vault/knowledge/youtube/{filepath.name}", "youtube")
-    return f"Transcripción guardada: {filepath.name}\n\n{transcript[:1000]}{'...' if len(transcript) > 1000 else ''}"
+    content = f"""---
+tags: [youtube, resumen, conocimiento]
+fecha: {date_str}
+url: {url}
+titulo: "{title}"
+fuente: youtube
+---
+
+# {title}
+
+> 🎥 [Ver vídeo]({url})
+
+{summary}
+"""
+    filepath.write_text(content, encoding="utf-8")
+    pushed = _git_push_vault(f"obsidian-vault/knowledge/youtube/{filepath.name}", "youtube")
+    logger.info(f"Resumen YouTube guardado: {filepath.name} (git: {pushed})")
+    return pushed
 
 
 def save_doc_to_vault(title: str, content: str) -> bool:
