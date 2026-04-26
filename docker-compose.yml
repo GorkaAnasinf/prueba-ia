@@ -104,6 +104,22 @@ services:
     environment:
       - ALLOW_ORIGINS=["*"]
     gpus: all
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  speaches-init:
+    image: curlimages/curl:latest
+    container_name: aiplatform-speaches-init
+    restart: "no"
+    depends_on:
+      speaches:
+        condition: service_healthy
+    command: >
+      sh -c "curl -s -X POST 'http://aiplatform-speaches:8000/v1/models/Systran%2Ffaster-whisper-large-v3' && echo 'Whisper model download initiated'"
 
   searxng:
     image: searxng/searxng:latest
