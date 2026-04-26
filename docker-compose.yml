@@ -104,36 +104,16 @@ services:
     ports:
       - "8888:8080"
 
-  evolution-api:
-    image: atendai/evolution-api:latest
-    container_name: aiplatform-evolution
+  wppconnect:
+    image: wppconnect/wppconnect-server:latest
+    container_name: aiplatform-wppconnect
     restart: unless-stopped
     ports:
-      - "8081:8080"
+      - "8081:21465"
     volumes:
-      - evolution_data:/evolution/instances
-    environment:
-      - SERVER_URL=http://192.168.6.231:8081
-      - AUTHENTICATION_TYPE=apikey
-      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-change-me-evolution-key}
-      - DATABASE_ENABLED=true
-      - DATABASE_PROVIDER=postgresql
-      - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@aiplatform-postgres:5432/evolution
-      - DATABASE_CONNECTION_CLIENT_NAME=evolution_api
-      - DATABASE_SAVE_DATA_INSTANCE=true
-      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
-      - DATABASE_SAVE_MESSAGE_UPDATE=true
-      - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_URI=redis://:${REDIS_PASSWORD}@aiplatform-redis:6379
-      - CACHE_REDIS_PREFIX_KEY=evolution
-      - QRCODE_LIMIT=30
-      - QRCODE_EXPIRATION_LIMIT=30
-      - LOG_LEVEL=INFO
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - wppconnect_data:/home/user/wppconnect-server/tokens
+      - ./wppconnect/config.json:/home/user/wppconnect-server/config.json:ro
+    shm_size: '1gb'
 
   n8n:
     image: n8nio/n8n:latest
@@ -163,8 +143,10 @@ services:
       - EXECUTIONS_DATA_MAX_AGE=168
       - AI_PLATFORM_API_KEY=${API_KEY}
       - AI_PLATFORM_URL=http://aiplatform-backend:8000
-      - EVOLUTION_URL=http://aiplatform-evolution:8080
-      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY:-change-me-evolution-key}
+      - WPPCONNECT_URL=http://aiplatform-wppconnect:21465
+      - WPPCONNECT_SECRET=${WPPCONNECT_SECRET:-change-me-wpp-secret}
+      - WPPCONNECT_SESSION=mi-sesion
+      - WPPCONNECT_TOKEN=
       - TELEGRAM_CHAT_ID=${TELEGRAM_ADMIN_CHAT_ID:-}
     depends_on:
       postgres:
@@ -210,5 +192,5 @@ volumes:
   redis_data:
   qdrant_data:
   searxng_data:
-  evolution_data:
+  wppconnect_data:
   n8n_data:
