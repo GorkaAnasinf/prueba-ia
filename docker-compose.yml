@@ -113,7 +113,7 @@ services:
     volumes:
       - evolution_data:/evolution/instances
     environment:
-      - SERVER_URL=http://localhost:8081
+      - SERVER_URL=http://192.168.6.231:8081
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:-change-me-evolution-key}
       - DATABASE_ENABLED=true
