@@ -105,6 +105,9 @@ services:
       - ALLOW_ORIGINS=["*"]
       - WHISPER__INFERENCE_DEVICE=cuda
       - WHISPER__COMPUTE_TYPE=int8_float16
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    gpus: all
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
