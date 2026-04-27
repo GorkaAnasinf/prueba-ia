@@ -103,8 +103,8 @@ services:
       - speaches_data:/home/ubuntu/.cache/huggingface
     environment:
       - ALLOW_ORIGINS=["*"]
-      - WHISPER__INFERENCE_DEVICE=cuda
-      - WHISPER__COMPUTE_TYPE=int8_float16
+      - WHISPER__INFERENCE_DEVICE=cpu
+      - WHISPER__COMPUTE_TYPE=int8
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     gpus: all
